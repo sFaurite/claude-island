@@ -18,6 +18,7 @@ enum NotchStatus: Equatable {
 enum NotchOpenReason {
     case click
     case hover
+    case hotkey
     case notification
     case boot
     case unknown
@@ -135,6 +136,21 @@ class NotchViewModel: ObservableObject {
                 self?.handleMouseDown()
             }
             .store(in: &cancellables)
+
+        GlobalHotkeyManager.shared.hotkeyTriggered
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                self?.handleHotkeyToggle()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func handleHotkeyToggle() {
+        if status == .opened {
+            notchClose()
+        } else {
+            notchOpen(reason: .hotkey)
+        }
     }
 
     /// Whether we're in chat mode (sticky behavior)
