@@ -53,9 +53,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.handleScreenChange()
         }
 
-        // Register global hotkey if enabled
+        // Register global hotkeys if enabled
         if AppSettings.isShortcutEnabled {
-            GlobalHotkeyManager.shared.register(shortcut: AppSettings.toggleShortcut)
+            GlobalHotkeyManager.shared.register(shortcut: AppSettings.toggleShortcut, id: 1)
+        }
+        if AppSettings.isHideShortcutEnabled {
+            GlobalHotkeyManager.shared.register(shortcut: AppSettings.hideShortcut, id: 2)
         }
 
         if updater.canCheckForUpdates {
@@ -73,7 +76,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        GlobalHotkeyManager.shared.unregister()
+        GlobalHotkeyManager.shared.unregisterAll()
         updateCheckTimer?.invalidate()
         screenObserver = nil
     }

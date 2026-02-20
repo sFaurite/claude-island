@@ -9,8 +9,16 @@ import Carbon
 import SwiftUI
 
 struct ShortcutRecorderRow: View {
-    @State private var isEnabled: Bool = AppSettings.isShortcutEnabled
-    @State private var shortcut: KeyboardShortcut = AppSettings.toggleShortcut
+    let icon: String
+    let label: String
+    let hotkeyID: UInt32
+    let getEnabled: () -> Bool
+    let setEnabled: (Bool) -> Void
+    let getShortcut: () -> KeyboardShortcut
+    let setShortcut: (KeyboardShortcut) -> Void
+
+    @State private var isEnabled: Bool = true
+    @State private var shortcut: KeyboardShortcut = .default
     @State private var isRecording = false
     @State private var isHovered = false
     @State private var localMonitor: Any?
@@ -20,20 +28,20 @@ struct ShortcutRecorderRow: View {
             // Toggle row
             Button {
                 isEnabled.toggle()
-                AppSettings.isShortcutEnabled = isEnabled
+                setEnabled(isEnabled)
                 if isEnabled {
-                    GlobalHotkeyManager.shared.register(shortcut: shortcut)
+                    GlobalHotkeyManager.shared.register(shortcut: shortcut, id: hotkeyID)
                 } else {
-                    GlobalHotkeyManager.shared.unregister()
+                    GlobalHotkeyManager.shared.unregister(id: hotkeyID)
                 }
             } label: {
                 HStack(spacing: 10) {
-                    Image(systemName: "keyboard")
+                    Image(systemName: icon)
                         .font(.system(size: 12))
                         .foregroundColor(textColor)
                         .frame(width: 16)
 
-                    Text("Global Shortcut")
+                    Text(label)
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(textColor)
 
@@ -62,14 +70,17 @@ struct ShortcutRecorderRow: View {
                 ShortcutRecorderField(
                     shortcut: $shortcut,
                     isRecording: $isRecording,
-                    localMonitor: $localMonitor
+                    localMonitor: $localMonitor,
+                    hotkeyID: hotkeyID,
+                    getEnabled: getEnabled,
+                    setShortcut: setShortcut
                 )
                 .padding(.leading, 28)
             }
         }
         .onAppear {
-            isEnabled = AppSettings.isShortcutEnabled
-            shortcut = AppSettings.toggleShortcut
+            isEnabled = getEnabled()
+            shortcut = getShortcut()
         }
         .onDisappear {
             stopRecording()
@@ -88,7 +99,7 @@ struct ShortcutRecorderRow: View {
         isRecording = false
         // Re-register hotkey if enabled
         if isEnabled {
-            GlobalHotkeyManager.shared.register(shortcut: shortcut)
+            GlobalHotkeyManager.shared.register(shortcut: shortcut, id: hotkeyID)
         }
     }
 }
@@ -99,6 +110,9 @@ private struct ShortcutRecorderField: View {
     @Binding var shortcut: KeyboardShortcut
     @Binding var isRecording: Bool
     @Binding var localMonitor: Any?
+    let hotkeyID: UInt32
+    let getEnabled: () -> Bool
+    let setShortcut: (KeyboardShortcut) -> Void
     @State private var isHovered = false
 
     var body: some View {
@@ -148,8 +162,8 @@ private struct ShortcutRecorderField: View {
     }
 
     private func startRecording() {
-        // Unregister hotkey during recording to avoid conflicts
-        GlobalHotkeyManager.shared.unregister()
+        // Unregister this hotkey during recording to avoid conflicts
+        GlobalHotkeyManager.shared.unregister(id: hotkeyID)
         isRecording = true
 
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -170,7 +184,7 @@ private struct ShortcutRecorderField: View {
                 modifierFlags: carbonModifiers
             )
             shortcut = newShortcut
-            AppSettings.toggleShortcut = newShortcut
+            setShortcut(newShortcut)
             stopRecording()
             return nil
         }
@@ -183,8 +197,8 @@ private struct ShortcutRecorderField: View {
         }
         isRecording = false
         // Re-register hotkey
-        if AppSettings.isShortcutEnabled {
-            GlobalHotkeyManager.shared.register(shortcut: shortcut)
+        if getEnabled() {
+            GlobalHotkeyManager.shared.register(shortcut: shortcut, id: hotkeyID)
         }
     }
 }

@@ -83,6 +83,18 @@ class NotchWindowController: NSWindowController {
             }
             .store(in: &cancellables)
 
+        // Observe isWindowHidden to hide/show the window entirely
+        viewModel.$isWindowHidden
+            .receive(on: DispatchQueue.main)
+            .sink { [weak notchWindow] hidden in
+                if hidden {
+                    notchWindow?.orderOut(nil)
+                } else {
+                    notchWindow?.orderFront(nil)
+                }
+            }
+            .store(in: &cancellables)
+
         // Start with ignoring mouse events (closed state)
         notchWindow.ignoresMouseEvents = true
 

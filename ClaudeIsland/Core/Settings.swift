@@ -16,9 +16,15 @@ struct KeyboardShortcut: Codable, Equatable {
     let keyCode: UInt32
     let modifierFlags: UInt32
 
-    /// Default shortcut: ⌘⇧N
+    /// Default toggle shortcut: ⌘⇧N
     static let `default` = KeyboardShortcut(
         keyCode: UInt32(kVK_ANSI_N),
+        modifierFlags: UInt32(cmdKey | shiftKey)
+    )
+
+    /// Default hide shortcut: ⌘⇧H
+    static let defaultHide = KeyboardShortcut(
+        keyCode: UInt32(kVK_ANSI_H),
         modifierFlags: UInt32(cmdKey | shiftKey)
     )
 
@@ -120,6 +126,8 @@ enum AppSettings {
         static let notificationSound = "notificationSound"
         static let toggleShortcut = "toggleShortcut"
         static let isShortcutEnabled = "isShortcutEnabled"
+        static let hideShortcut = "hideShortcut"
+        static let isHideShortcutEnabled = "isHideShortcutEnabled"
         static let showTotalSessionCount = "showTotalSessionCount"
         static let showActiveSessionCount = "showActiveSessionCount"
         static let maxNotificationVolume = "maxNotificationVolume"
@@ -153,6 +161,35 @@ enum AppSettings {
         set {
             if let data = try? JSONEncoder().encode(newValue) {
                 defaults.set(data, forKey: Keys.toggleShortcut)
+            }
+        }
+    }
+
+    // MARK: - Hide Shortcut
+
+    /// Whether the hide shortcut is enabled
+    static var isHideShortcutEnabled: Bool {
+        get {
+            if defaults.object(forKey: Keys.isHideShortcutEnabled) == nil { return true }
+            return defaults.bool(forKey: Keys.isHideShortcutEnabled)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.isHideShortcutEnabled)
+        }
+    }
+
+    /// The keyboard shortcut used to hide/show the notch window
+    static var hideShortcut: KeyboardShortcut {
+        get {
+            guard let data = defaults.data(forKey: Keys.hideShortcut),
+                  let shortcut = try? JSONDecoder().decode(KeyboardShortcut.self, from: data) else {
+                return .defaultHide
+            }
+            return shortcut
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: Keys.hideShortcut)
             }
         }
     }

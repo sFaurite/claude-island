@@ -40,7 +40,24 @@ struct NotchMenuView: View {
             // Appearance settings
             ScreenPickerRow(screenSelector: screenSelector)
             SoundPickerRow(soundSelector: soundSelector)
-            ShortcutRecorderRow()
+            ShortcutRecorderRow(
+                icon: "keyboard",
+                label: "Global Shortcut",
+                hotkeyID: 1,
+                getEnabled: { AppSettings.isShortcutEnabled },
+                setEnabled: { AppSettings.isShortcutEnabled = $0 },
+                getShortcut: { AppSettings.toggleShortcut },
+                setShortcut: { AppSettings.toggleShortcut = $0 }
+            )
+            ShortcutRecorderRow(
+                icon: "eye.slash",
+                label: "Hide Notch",
+                hotkeyID: 2,
+                getEnabled: { AppSettings.isHideShortcutEnabled },
+                setEnabled: { AppSettings.isHideShortcutEnabled = $0 },
+                getShortcut: { AppSettings.hideShortcut },
+                setShortcut: { AppSettings.hideShortcut = $0 }
+            )
 
             MenuToggleRow(
                 icon: "number",

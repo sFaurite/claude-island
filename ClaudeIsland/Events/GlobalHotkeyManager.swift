@@ -2,7 +2,7 @@
 //  GlobalHotkeyManager.swift
 //  ClaudeIsland
 //
-//  Manages a system-wide hotkey using Carbon RegisterEventHotKey
+//  Manages system-wide hotkeys using Carbon RegisterEventHotKey
 //
 
 import Carbon
@@ -11,30 +11,80 @@ import Foundation
 
 // Hotkey constants outside the actor-isolated class for safe C callback access
 private let hotkeySignature: OSType = 0x434C_4953  // "CLIS"
-private let hotkeyIDValue: UInt32 = 1
 
 class GlobalHotkeyManager {
     static let shared = GlobalHotkeyManager()
 
-    /// Fires when the registered hotkey is triggered
+    /// Fires when the toggle hotkey is triggered (ID=1)
     let hotkeyTriggered = PassthroughSubject<Void, Never>()
 
-    private var hotkeyRef: EventHotKeyRef?
+    /// Fires when the hide hotkey is triggered (ID=2)
+    let hideHotkeyTriggered = PassthroughSubject<Void, Never>()
+
+    private var hotkeyRefs: [UInt32: EventHotKeyRef] = [:]
     private var eventHandlerRef: EventHandlerRef?
 
     private init() {}
 
     deinit {
-        unregister()
+        unregisterAll()
     }
 
     // MARK: - Public API
 
-    func register(shortcut: KeyboardShortcut) {
-        // Unregister any existing hotkey first
-        unregister()
+    func register(shortcut: KeyboardShortcut, id: UInt32 = 1) {
+        // Unregister this specific hotkey if already registered
+        unregister(id: id)
 
-        // Install Carbon event handler
+        // Install shared Carbon event handler if not yet installed
+        installHandlerIfNeeded()
+
+        // Register the hotkey
+        var hotkeyID = EventHotKeyID(signature: hotkeySignature, id: id)
+        var ref: EventHotKeyRef?
+        let status = RegisterEventHotKey(
+            shortcut.keyCode,
+            shortcut.modifierFlags,
+            hotkeyID,
+            GetApplicationEventTarget(),
+            0,
+            &ref
+        )
+
+        if status == noErr, let ref = ref {
+            hotkeyRefs[id] = ref
+        } else {
+            print("[GlobalHotkeyManager] Failed to register hotkey id=\(id): \(status)")
+        }
+    }
+
+    func unregister(id: UInt32 = 1) {
+        if let ref = hotkeyRefs.removeValue(forKey: id) {
+            UnregisterEventHotKey(ref)
+        }
+        // Remove shared handler if no hotkeys remain
+        if hotkeyRefs.isEmpty, let handler = eventHandlerRef {
+            RemoveEventHandler(handler)
+            eventHandlerRef = nil
+        }
+    }
+
+    func unregisterAll() {
+        for (_, ref) in hotkeyRefs {
+            UnregisterEventHotKey(ref)
+        }
+        hotkeyRefs.removeAll()
+        if let handler = eventHandlerRef {
+            RemoveEventHandler(handler)
+            eventHandlerRef = nil
+        }
+    }
+
+    // MARK: - Private
+
+    private func installHandlerIfNeeded() {
+        guard eventHandlerRef == nil else { return }
+
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
@@ -61,44 +111,26 @@ class GlobalHotkeyManager {
                     &hkID
                 )
 
-                if hkID.signature == hotkeySignature && hkID.id == hotkeyIDValue {
-                    DispatchQueue.main.async {
-                        manager.hotkeyTriggered.send()
-                    }
-                    return noErr
+                guard hkID.signature == hotkeySignature else {
+                    return OSStatus(eventNotHandledErr)
                 }
-                return OSStatus(eventNotHandledErr)
+
+                DispatchQueue.main.async {
+                    switch hkID.id {
+                    case 1:
+                        manager.hotkeyTriggered.send()
+                    case 2:
+                        manager.hideHotkeyTriggered.send()
+                    default:
+                        break
+                    }
+                }
+                return noErr
             },
             1,
             &eventType,
             selfPtr,
             &eventHandlerRef
         )
-
-        // Register the hotkey
-        var id = EventHotKeyID(signature: hotkeySignature, id: hotkeyIDValue)
-        let status = RegisterEventHotKey(
-            shortcut.keyCode,
-            shortcut.modifierFlags,
-            id,
-            GetApplicationEventTarget(),
-            0,
-            &hotkeyRef
-        )
-
-        if status != noErr {
-            print("[GlobalHotkeyManager] Failed to register hotkey: \(status)")
-        }
-    }
-
-    func unregister() {
-        if let ref = hotkeyRef {
-            UnregisterEventHotKey(ref)
-            hotkeyRef = nil
-        }
-        if let handler = eventHandlerRef {
-            RemoveEventHandler(handler)
-            eventHandlerRef = nil
-        }
     }
 }

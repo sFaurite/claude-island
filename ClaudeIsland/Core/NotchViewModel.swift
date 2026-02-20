@@ -46,6 +46,7 @@ class NotchViewModel: ObservableObject {
     @Published var openReason: NotchOpenReason = .unknown
     @Published var contentType: NotchContentType = .instances
     @Published var isHovering: Bool = false
+    @Published var isWindowHidden: Bool = false
 
     // MARK: - Dependencies
 
@@ -75,7 +76,7 @@ class NotchViewModel: ObservableObject {
             // Compact size for settings menu
             return CGSize(
                 width: min(screenRect.width * 0.4, 480),
-                height: 560 + screenSelector.expandedPickerHeight + soundSelector.expandedPickerHeight
+                height: 620 + screenSelector.expandedPickerHeight + soundSelector.expandedPickerHeight
             )
         case .instances:
             return CGSize(
@@ -143,6 +144,17 @@ class NotchViewModel: ObservableObject {
                 self?.handleHotkeyToggle()
             }
             .store(in: &cancellables)
+
+        GlobalHotkeyManager.shared.hideHotkeyTriggered
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
+                self?.toggleWindowHidden()
+            }
+            .store(in: &cancellables)
+    }
+
+    private func toggleWindowHidden() {
+        isWindowHidden.toggle()
     }
 
     private func handleHotkeyToggle() {
