@@ -12,6 +12,7 @@ struct SoundPickerRow: View {
     @ObservedObject var soundSelector: SoundSelector
     @State private var isHovered = false
     @State private var selectedSound: NotificationSound = AppSettings.notificationSound
+    @State private var maxVolume: Float = AppSettings.maxNotificationVolume
 
     private var isExpanded: Bool {
         soundSelector.isPickerExpanded
@@ -69,9 +70,9 @@ struct SoundPickerRow: View {
                                 sound: sound,
                                 isSelected: selectedSound == sound
                             ) {
-                                // Play preview sound
+                                // Play preview sound with volume cap
                                 if let soundName = sound.soundName {
-                                    NSSound(named: soundName)?.play()
+                                    NotificationSoundPlayer.shared.play(sound: soundName, volume: maxVolume)
                                 }
                                 selectedSound = sound
                                 AppSettings.notificationSound = sound
@@ -83,9 +84,37 @@ struct SoundPickerRow: View {
                 .padding(.leading, 28)
                 .padding(.top, 4)
             }
+            // Volume cap slider (visible when a sound is selected)
+            if selectedSound != .none {
+                HStack(spacing: 8) {
+                    Image(systemName: "speaker.wave.1")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.4))
+                        .frame(width: 14)
+
+                    Slider(value: $maxVolume, in: 0.05...1.0, step: 0.05)
+                        .tint(.white.opacity(0.4))
+                        .onChange(of: maxVolume) { _, newValue in
+                            AppSettings.maxNotificationVolume = newValue
+                        }
+
+                    Text("\(Int(maxVolume * 100))%")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                        .frame(width: 36, alignment: .trailing)
+
+                    Image(systemName: "speaker.wave.3")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.4))
+                        .frame(width: 14)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
         }
         .onAppear {
             selectedSound = AppSettings.notificationSound
+            maxVolume = AppSettings.maxNotificationVolume
         }
     }
 

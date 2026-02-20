@@ -122,6 +122,7 @@ enum AppSettings {
         static let isShortcutEnabled = "isShortcutEnabled"
         static let showTotalSessionCount = "showTotalSessionCount"
         static let showActiveSessionCount = "showActiveSessionCount"
+        static let maxNotificationVolume = "maxNotificationVolume"
     }
 
     // MARK: - Notification Sound
@@ -193,6 +194,19 @@ enum AppSettings {
         }
         set {
             defaults.set(newValue.rawValue, forKey: Keys.notificationSound)
+        }
+    }
+
+    // MARK: - Max Notification Volume
+
+    /// Maximum volume for notification sounds (0.0–1.0). Acts as a cap over system volume.
+    static var maxNotificationVolume: Float {
+        get {
+            if defaults.object(forKey: Keys.maxNotificationVolume) == nil { return 0.5 }
+            return defaults.float(forKey: Keys.maxNotificationVolume)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.maxNotificationVolume)
         }
     }
 }
