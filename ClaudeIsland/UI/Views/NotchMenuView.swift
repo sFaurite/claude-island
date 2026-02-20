@@ -20,6 +20,8 @@ struct NotchMenuView: View {
     @ObservedObject private var soundSelector = SoundSelector.shared
     @State private var hooksInstalled: Bool = false
     @State private var launchAtLogin: Bool = false
+    @State private var showTotalCount: Bool = AppSettings.showTotalSessionCount
+    @State private var showActiveCount: Bool = AppSettings.showActiveSessionCount
 
     var body: some View {
         VStack(spacing: 4) {
@@ -39,6 +41,24 @@ struct NotchMenuView: View {
             ScreenPickerRow(screenSelector: screenSelector)
             SoundPickerRow(soundSelector: soundSelector)
             ShortcutRecorderRow()
+
+            MenuToggleRow(
+                icon: "number",
+                label: "Total Sessions",
+                isOn: showTotalCount
+            ) {
+                showTotalCount.toggle()
+                AppSettings.showTotalSessionCount = showTotalCount
+            }
+
+            MenuToggleRow(
+                icon: "bolt.fill",
+                label: "Active Sessions",
+                isOn: showActiveCount
+            ) {
+                showActiveCount.toggle()
+                AppSettings.showActiveSessionCount = showActiveCount
+            }
 
             Divider()
                 .background(Color.white.opacity(0.08))
@@ -433,7 +453,7 @@ struct AccessibilityRow: View {
     }
 
     private func openAccessibilitySettings() {
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
     }

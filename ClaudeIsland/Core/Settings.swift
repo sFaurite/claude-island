@@ -120,6 +120,8 @@ enum AppSettings {
         static let notificationSound = "notificationSound"
         static let toggleShortcut = "toggleShortcut"
         static let isShortcutEnabled = "isShortcutEnabled"
+        static let showTotalSessionCount = "showTotalSessionCount"
+        static let showActiveSessionCount = "showActiveSessionCount"
     }
 
     // MARK: - Notification Sound
@@ -151,6 +153,30 @@ enum AppSettings {
             if let data = try? JSONEncoder().encode(newValue) {
                 defaults.set(data, forKey: Keys.toggleShortcut)
             }
+        }
+    }
+
+    // MARK: - Session Counters
+
+    /// Whether to show the total session count in the notch
+    static var showTotalSessionCount: Bool {
+        get {
+            if defaults.object(forKey: Keys.showTotalSessionCount) == nil { return true }
+            return defaults.bool(forKey: Keys.showTotalSessionCount)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.showTotalSessionCount)
+        }
+    }
+
+    /// Whether to show the active session count in the notch
+    static var showActiveSessionCount: Bool {
+        get {
+            if defaults.object(forKey: Keys.showActiveSessionCount) == nil { return true }
+            return defaults.bool(forKey: Keys.showActiveSessionCount)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.showActiveSessionCount)
         }
     }
 
