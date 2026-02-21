@@ -47,6 +47,8 @@ class NotchViewModel: ObservableObject {
     @Published var contentType: NotchContentType = .instances
     @Published var isHovering: Bool = false
     @Published var isWindowHidden: Bool = false
+    @Published var selectedSettingsTab: SettingsTab = .appearance
+    @Published var showWingsSettings: Bool = AppSettings.showWingsInFullscreen
 
     // MARK: - Dependencies
 
@@ -73,10 +75,19 @@ class NotchViewModel: ObservableObject {
                 height: 580
             )
         case .menu:
-            // Compact size for settings menu
+            // Dynamic height based on active tab and wings state
+            let menuExtra: CGFloat
+            switch selectedSettingsTab {
+            case .appearance:
+                menuExtra = showWingsSettings ? 240 : 100
+            case .shortcuts:
+                menuExtra = 0
+            case .system:
+                menuExtra = 20
+            }
             return CGSize(
                 width: min(screenRect.width * 0.4, 480),
-                height: 450 + screenSelector.expandedPickerHeight + soundSelector.expandedPickerHeight
+                height: 480 + menuExtra + screenSelector.expandedPickerHeight + soundSelector.expandedPickerHeight
             )
         case .instances:
             return CGSize(

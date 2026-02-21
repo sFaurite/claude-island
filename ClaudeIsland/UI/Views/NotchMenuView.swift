@@ -44,10 +44,15 @@ struct NotchMenuView: View {
     @State private var launchAtLogin: Bool = false
     @State private var showTotalCount: Bool = AppSettings.showTotalSessionCount
     @State private var showActiveCount: Bool = AppSettings.showActiveSessionCount
-    @State private var selectedTab: SettingsTab = .appearance
     @State private var showWings: Bool = AppSettings.showWingsInFullscreen
     @State private var wingsFontSize: CGFloat = AppSettings.wingsFontSize
     @State private var wingsLayout: WingsLayout = AppSettings.wingsLayout
+    @State private var wingsShow5h: Bool = AppSettings.wingsShow5h
+    @State private var wingsShow7j: Bool = AppSettings.wingsShow7j
+    @State private var wingsShowHeatmap: Bool = AppSettings.wingsShowHeatmap
+    @State private var wingsShowTokens: Bool = AppSettings.wingsShowTokens
+    @State private var wingsShowDaily: Bool = AppSettings.wingsShowDaily
+    @State private var wingsShowRecord: Bool = AppSettings.wingsShowRecord
 
     var body: some View {
         VStack(spacing: 4) {
@@ -64,7 +69,7 @@ struct NotchMenuView: View {
                 .padding(.vertical, 4)
 
             // Tab bar
-            SettingsTabBar(selectedTab: $selectedTab)
+            SettingsTabBar(selectedTab: $viewModel.selectedSettingsTab)
 
             Divider()
                 .background(Color.white.opacity(0.08))
@@ -72,7 +77,7 @@ struct NotchMenuView: View {
 
             // Tab content
             Group {
-                switch selectedTab {
+                switch viewModel.selectedSettingsTab {
                 case .appearance:
                     appearanceTab
                 case .shortcuts:
@@ -82,7 +87,7 @@ struct NotchMenuView: View {
                 }
             }
             .transition(.opacity)
-            .animation(.easeInOut(duration: 0.15), value: selectedTab)
+            .animation(.easeInOut(duration: 0.15), value: viewModel.selectedSettingsTab)
 
             Spacer(minLength: 0)
 
@@ -123,7 +128,7 @@ struct NotchMenuView: View {
                 refreshStates()
             }
         }
-        .onChange(of: selectedTab) { _, _ in
+        .onChange(of: viewModel.selectedSettingsTab) { _, _ in
             screenSelector.isPickerExpanded = false
             soundSelector.isPickerExpanded = false
         }
@@ -158,6 +163,7 @@ struct NotchMenuView: View {
         ) {
             showWings.toggle()
             AppSettings.showWingsInFullscreen = showWings
+            viewModel.showWingsSettings = showWings
         }
         if showWings {
             WingsLayoutRow(selected: $wingsLayout) { newValue in
@@ -166,6 +172,24 @@ struct NotchMenuView: View {
             FontSizeRow(value: $wingsFontSize) { newValue in
                 AppSettings.wingsFontSize = newValue
             }
+            WingsElementsRow(
+                label: "Quotas",
+                icon: "gauge.with.dots.needle.33percent",
+                chips: [
+                    ("5h", $wingsShow5h, { AppSettings.wingsShow5h = $0 }),
+                    ("7j", $wingsShow7j, { AppSettings.wingsShow7j = $0 }),
+                ]
+            )
+            WingsElementsRow(
+                label: "Stats",
+                icon: "chart.bar",
+                chips: [
+                    ("Heatmap", $wingsShowHeatmap, { AppSettings.wingsShowHeatmap = $0 }),
+                    ("Tokens", $wingsShowTokens, { AppSettings.wingsShowTokens = $0 }),
+                    ("Daily", $wingsShowDaily, { AppSettings.wingsShowDaily = $0 }),
+                    ("Record", $wingsShowRecord, { AppSettings.wingsShowRecord = $0 }),
+                ]
+            )
         }
     }
 
@@ -231,6 +255,14 @@ struct NotchMenuView: View {
         hooksInstalled = HookInstaller.isInstalled()
         launchAtLogin = SMAppService.mainApp.status == .enabled
         screenSelector.refreshScreens()
+        showWings = AppSettings.showWingsInFullscreen
+        viewModel.showWingsSettings = showWings
+        wingsShow5h = AppSettings.wingsShow5h
+        wingsShow7j = AppSettings.wingsShow7j
+        wingsShowHeatmap = AppSettings.wingsShowHeatmap
+        wingsShowTokens = AppSettings.wingsShowTokens
+        wingsShowDaily = AppSettings.wingsShowDaily
+        wingsShowRecord = AppSettings.wingsShowRecord
     }
 }
 
@@ -740,6 +772,68 @@ private struct FontSizeRow: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+    }
+}
+
+// MARK: - Wings Elements Row
+
+private struct WingsElementsRow: View {
+    let label: String
+    let icon: String
+    let chips: [(String, Binding<Bool>, (Bool) -> Void)]
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.7))
+                .frame(width: 16)
+
+            Text(label)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+
+            Spacer()
+
+            HStack(spacing: 2) {
+                ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
+                    WingsElementChip(
+                        label: chip.0,
+                        isOn: chip.1,
+                        onChange: chip.2
+                    )
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+}
+
+private struct WingsElementChip: View {
+    let label: String
+    @Binding var isOn: Bool
+    let onChange: (Bool) -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+            onChange(isOn)
+        } label: {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(isOn ? TerminalColors.green : .white.opacity(isHovered ? 0.7 : 0.4))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(isOn ? Color.white.opacity(0.10) : (isHovered ? Color.white.opacity(0.05) : Color.clear))
+                )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
     }
 }
 

@@ -78,6 +78,12 @@ struct NotchWingsView: View {
 
     @AppStorage("wingsLayout") private var wingsLayoutRaw: String = WingsLayout.both.rawValue
     @AppStorage("wingsFontSize") private var fontSizeRaw: Double = 10
+    @AppStorage("wingsShow5h") private var show5h: Bool = true
+    @AppStorage("wingsShow7j") private var show7j: Bool = true
+    @AppStorage("wingsShowHeatmap") private var showHeatmap: Bool = true
+    @AppStorage("wingsShowTokens") private var showTokens: Bool = true
+    @AppStorage("wingsShowDaily") private var showDaily: Bool = true
+    @AppStorage("wingsShowRecord") private var showRecord: Bool = true
 
     private var layout: WingsLayout { WingsLayout(rawValue: wingsLayoutRaw) ?? .both }
     private var fontSize: CGFloat { CGFloat(fontSizeRaw) }
@@ -131,8 +137,12 @@ struct NotchWingsView: View {
                     .foregroundColor(TerminalColors.amber)
                 }
 
-                rateLimitPill(label: "5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, forceUnit: nil, windowSeconds: 5 * 3600)
-                rateLimitPill(label: "7j", utilization: rl.sevenDayUtilization, reset: rl.sevenDayReset, forceUnit: .days, windowSeconds: 7 * 86400)
+                if show5h {
+                    rateLimitPill(label: "5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, forceUnit: nil, windowSeconds: 5 * 3600)
+                }
+                if show7j {
+                    rateLimitPill(label: "7j", utilization: rl.sevenDayUtilization, reset: rl.sevenDayReset, forceUnit: .days, windowSeconds: 7 * 86400)
+                }
                 if rl.overageUtilization > 0 {
                     overagePill(utilization: rl.overageUtilization)
                 }
@@ -160,73 +170,7 @@ struct NotchWingsView: View {
     private var rightWing: some View {
         HStack(spacing: 6) {
             if let st = stats {
-                // Mini activity heatmap
-                ActivityHeatmap(entries: st.heatmapEntries)
-
-                // Separator
-                Rectangle()
-                    .fill(.white.opacity(0.15))
-                    .frame(width: 1, height: 20)
-
-                // All-time tokens + today live tokens
-                Text("Σ " + formatTokens(st.totalTokensAllTime))
-                    .font(boldFont)
-                    .foregroundColor(.white.opacity(0.5))
-
-                if st.todayLiveTokens > 0 {
-                    Text("·")
-                        .font(wingFont)
-                        .foregroundColor(.white.opacity(0.2))
-
-                    Text("⇡ " + formatTokens(st.todayLiveTokens))
-                        .font(boldFont)
-                        .foregroundColor(.white.opacity(0.7))
-                }
-
-                Text("·")
-                    .font(wingFont)
-                    .foregroundColor(.white.opacity(0.2))
-
-                // Daily stats (with date prefix if not today)
-                if !st.isToday {
-                    Text(formatShortDate(st.date))
-                        .font(boldFont)
-                        .foregroundColor(.white.opacity(0.35))
-                }
-
-                Text("\(st.messageCount) msgs")
-                    .font(wingFont)
-                    .foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
-
-                Text("·")
-                    .font(wingFont)
-                    .foregroundColor(.white.opacity(0.2))
-
-                Text("\(st.sessionCount) sess")
-                    .font(wingFont)
-                    .foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
-
-                Text("·")
-                    .font(wingFont)
-                    .foregroundColor(.white.opacity(0.2))
-
-                Text(formatTokens(st.totalTokens))
-                    .font(wingFont)
-                    .foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
-
-                if st.recordTokens > 0 {
-                    Text("·")
-                        .font(wingFont)
-                        .foregroundColor(.white.opacity(0.2))
-
-                    HStack(spacing: 2) {
-                        Text("🏆")
-                            .font(.system(size: fontSize - 3))
-                        Text(formatShortDate(st.recordDate) + " " + formatTokens(st.recordTokens))
-                            .font(smallFont)
-                    }
-                    .foregroundColor(TerminalColors.amber.opacity(0.7))
-                }
+                rightWingContent(st)
             } else {
                 Text("—")
                     .font(wingFont)
@@ -244,6 +188,92 @@ struct NotchWingsView: View {
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
+    }
+
+    @ViewBuilder
+    private func rightWingContent(_ st: DailyStats) -> some View {
+        // Mini activity heatmap
+        if showHeatmap {
+            ActivityHeatmap(entries: st.heatmapEntries)
+        }
+
+        // Separator line after heatmap (only if heatmap shown AND something follows)
+        if showHeatmap && (showTokens || showDaily || showRecord) {
+            Rectangle()
+                .fill(.white.opacity(0.15))
+                .frame(width: 1, height: 20)
+        }
+
+        // All-time tokens + today live tokens
+        if showTokens {
+            Text("Σ " + formatTokens(st.totalTokensAllTime))
+                .font(boldFont)
+                .foregroundColor(.white.opacity(0.5))
+
+            if st.todayLiveTokens > 0 {
+                Text("·")
+                    .font(wingFont)
+                    .foregroundColor(.white.opacity(0.2))
+
+                Text("⇡ " + formatTokens(st.todayLiveTokens))
+                    .font(boldFont)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+        }
+
+        // Dot separator after tokens (only if tokens shown AND daily or record follows)
+        if showTokens && (showDaily || showRecord) {
+            Text("·")
+                .font(wingFont)
+                .foregroundColor(.white.opacity(0.2))
+        }
+
+        // Daily stats (msgs, sessions, total tokens)
+        if showDaily {
+            if !st.isToday {
+                Text(formatShortDate(st.date))
+                    .font(boldFont)
+                    .foregroundColor(.white.opacity(0.35))
+            }
+
+            Text("\(st.messageCount) msgs")
+                .font(wingFont)
+                .foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
+
+            Text("·")
+                .font(wingFont)
+                .foregroundColor(.white.opacity(0.2))
+
+            Text("\(st.sessionCount) sess")
+                .font(wingFont)
+                .foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
+
+            Text("·")
+                .font(wingFont)
+                .foregroundColor(.white.opacity(0.2))
+
+            Text(formatTokens(st.totalTokens))
+                .font(wingFont)
+                .foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
+        }
+
+        // Record
+        if showRecord && st.recordTokens > 0 {
+            // Dot before record (only if something precedes)
+            if showDaily || showTokens || showHeatmap {
+                Text("·")
+                    .font(wingFont)
+                    .foregroundColor(.white.opacity(0.2))
+            }
+
+            HStack(spacing: 2) {
+                Text("🏆")
+                    .font(.system(size: fontSize - 3))
+                Text(formatShortDate(st.recordDate) + " " + formatTokens(st.recordTokens))
+                    .font(smallFont)
+            }
+            .foregroundColor(TerminalColors.amber.opacity(0.7))
+        }
     }
 
     // MARK: - Rate Limit Pill

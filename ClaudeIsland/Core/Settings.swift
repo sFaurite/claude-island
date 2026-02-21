@@ -158,6 +158,12 @@ enum AppSettings {
         static let showWingsInFullscreen = "showWingsInFullscreen"
         static let wingsFontSize = "wingsFontSize"
         static let wingsLayout = "wingsLayout"
+        static let wingsShow5h = "wingsShow5h"
+        static let wingsShow7j = "wingsShow7j"
+        static let wingsShowHeatmap = "wingsShowHeatmap"
+        static let wingsShowTokens = "wingsShowTokens"
+        static let wingsShowDaily = "wingsShowDaily"
+        static let wingsShowRecord = "wingsShowRecord"
     }
 
     // MARK: - Notification Sound
@@ -297,6 +303,62 @@ enum AppSettings {
         set {
             defaults.set(newValue.rawValue, forKey: Keys.wingsLayout)
         }
+    }
+
+    // MARK: - Wings Element Toggles
+
+    /// Whether to show the 5h rate limit in the left wing
+    static var wingsShow5h: Bool {
+        get {
+            if defaults.object(forKey: Keys.wingsShow5h) == nil { return true }
+            return defaults.bool(forKey: Keys.wingsShow5h)
+        }
+        set { defaults.set(newValue, forKey: Keys.wingsShow5h) }
+    }
+
+    /// Whether to show the 7j rate limit in the left wing
+    static var wingsShow7j: Bool {
+        get {
+            if defaults.object(forKey: Keys.wingsShow7j) == nil { return true }
+            return defaults.bool(forKey: Keys.wingsShow7j)
+        }
+        set { defaults.set(newValue, forKey: Keys.wingsShow7j) }
+    }
+
+    /// Whether to show the heatmap in the right wing
+    static var wingsShowHeatmap: Bool {
+        get {
+            if defaults.object(forKey: Keys.wingsShowHeatmap) == nil { return true }
+            return defaults.bool(forKey: Keys.wingsShowHeatmap)
+        }
+        set { defaults.set(newValue, forKey: Keys.wingsShowHeatmap) }
+    }
+
+    /// Whether to show the tokens (Σ + ⇡) in the right wing
+    static var wingsShowTokens: Bool {
+        get {
+            if defaults.object(forKey: Keys.wingsShowTokens) == nil { return true }
+            return defaults.bool(forKey: Keys.wingsShowTokens)
+        }
+        set { defaults.set(newValue, forKey: Keys.wingsShowTokens) }
+    }
+
+    /// Whether to show daily stats (msgs, sessions, total) in the right wing
+    static var wingsShowDaily: Bool {
+        get {
+            if defaults.object(forKey: Keys.wingsShowDaily) == nil { return true }
+            return defaults.bool(forKey: Keys.wingsShowDaily)
+        }
+        set { defaults.set(newValue, forKey: Keys.wingsShowDaily) }
+    }
+
+    /// Whether to show the record (🏆) in the right wing
+    static var wingsShowRecord: Bool {
+        get {
+            if defaults.object(forKey: Keys.wingsShowRecord) == nil { return true }
+            return defaults.bool(forKey: Keys.wingsShowRecord)
+        }
+        set { defaults.set(newValue, forKey: Keys.wingsShowRecord) }
     }
 
     // MARK: - Max Notification Volume
