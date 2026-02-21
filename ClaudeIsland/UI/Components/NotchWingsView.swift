@@ -94,7 +94,8 @@ struct NotchWingsView: View {
                 leftWing
                     .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
-                Spacer()
+                Color.clear
+                    .frame(maxWidth: .infinity)
             }
 
             Color.clear
@@ -104,7 +105,8 @@ struct NotchWingsView: View {
                 rightWing
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                Spacer()
+                Color.clear
+                    .frame(maxWidth: .infinity)
             }
         }
         .frame(height: height)
