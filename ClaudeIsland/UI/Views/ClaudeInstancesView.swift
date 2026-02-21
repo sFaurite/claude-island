@@ -88,13 +88,27 @@ struct ClaudeInstancesView: View {
     // MARK: - Actions
 
     private func focusSession(_ session: SessionState) {
-        guard session.isInTmux else { return }
-
         Task {
+            // Try to find the terminal app from the Claude process tree
             if let pid = session.pid {
-                _ = await YabaiController.shared.focusWindow(forClaudePid: pid)
-            } else {
-                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
+                let tree = ProcessTreeBuilder.shared.buildTree()
+                if let terminalPid = ProcessTreeBuilder.shared.findTerminalPid(forProcess: pid, tree: tree) {
+                    let apps = NSWorkspace.shared.runningApplications
+                    if let app = apps.first(where: { $0.processIdentifier == Int32(terminalPid) }) {
+                        app.activate()
+                        return
+                    }
+                }
+            }
+
+            // Fallback: activate any running terminal app from registry
+            let apps = NSWorkspace.shared.runningApplications
+            for app in apps {
+                if let bundleId = app.bundleIdentifier,
+                   TerminalAppRegistry.isTerminalBundle(bundleId) {
+                    app.activate()
+                    return
+                }
             }
         }
     }

@@ -20,6 +20,8 @@ struct NotchView: View {
     @StateObject private var sessionMonitor = ClaudeSessionMonitor()
     @StateObject private var activityCoordinator = NotchActivityCoordinator.shared
     @ObservedObject private var updateManager = UpdateManager.shared
+    @StateObject private var menuBarDetector = MenuBarDetector()
+    @StateObject private var wingsController = NotchWingsController()
     @State private var previousPendingIds: Set<String> = []
     @State private var previousWaitingForInputIds: Set<String> = []
     @State private var waitingForInputTimestamps: [String: Date] = [:]  // sessionId -> when it entered waitingForInput
@@ -71,15 +73,14 @@ struct NotchView: View {
         // Permission indicator adds width on left side only
         let permissionIndicatorWidth: CGFloat = hasPendingPermission ? 18 : 0
 
-        // Counter badges add width
-        let counterWidth: CGFloat = (totalSessionCount > 0 ? 12 : 0) + (activeSessionCount > 0 ? 12 : 0)
+        // Counters are stacked below icons — no extra horizontal width needed
 
         // Expand for processing activity
         if activityCoordinator.expandingActivity.show {
             switch activityCoordinator.expandingActivity.type {
             case .claude:
                 let baseWidth = 2 * max(0, closedNotchSize.height - 12) + 20
-                return baseWidth + permissionIndicatorWidth + counterWidth
+                return baseWidth + permissionIndicatorWidth
             case .none:
                 break
             }
@@ -87,12 +88,12 @@ struct NotchView: View {
 
         // Expand for pending permissions (left indicator) or waiting for input (checkmark on right)
         if hasPendingPermission {
-            return 2 * max(0, closedNotchSize.height - 12) + 20 + permissionIndicatorWidth + counterWidth
+            return 2 * max(0, closedNotchSize.height - 12) + 20 + permissionIndicatorWidth
         }
 
         // Waiting for input just shows checkmark on right, no extra left indicator
         if hasWaitingForInput {
-            return 2 * max(0, closedNotchSize.height - 12) + 20 + counterWidth
+            return 2 * max(0, closedNotchSize.height - 12) + 20
         }
 
         return 0
@@ -141,6 +142,18 @@ struct NotchView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
+            // Wings — behind the notch, only when menu bar is hidden and notch is closed
+            if menuBarDetector.isMenuBarHidden && viewModel.status == .closed {
+                NotchWingsView(
+                    rateLimits: wingsController.rateLimits,
+                    stats: wingsController.stats,
+                    notchWidth: closedContentWidth,
+                    height: closedNotchSize.height,
+                    tick: wingsController.tick
+                )
+                .transition(.opacity.animation(.easeInOut(duration: 0.3)))
+            }
+
             // Outer container does NOT receive hits - only the notch content does
             VStack(spacing: 0) {
                 notchLayout
@@ -211,6 +224,16 @@ struct NotchView: View {
             handleProcessingChange()
             handleWaitingForInputChange(instances)
         }
+        .onChange(of: menuBarDetector.isMenuBarHidden) { _, isHidden in
+            if isHidden {
+                wingsController.startAutoRefresh()
+                isVisible = true
+            } else {
+                wingsController.stopAutoRefresh()
+                // Let handleProcessingChange decide visibility
+                handleProcessingChange()
+            }
+        }
     }
 
     // MARK: - Notch Layout
@@ -252,17 +275,19 @@ struct NotchView: View {
     @ViewBuilder
     private var headerRow: some View {
         HStack(spacing: 0) {
-            // Left side - total count + crab + optional permission indicator
+            // Left side - crab (with count below) + optional permission indicator
             if showClosedActivity {
                 HStack(spacing: 4) {
-                    if totalSessionCount > 0 {
-                        Text("\(totalSessionCount)")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
-                    }
+                    VStack(spacing: 1) {
+                        ClaudeCrabIcon(size: 14, animateLegs: isProcessing)
+                            .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: showClosedActivity)
 
-                    ClaudeCrabIcon(size: 14, animateLegs: isProcessing)
-                        .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: showClosedActivity)
+                        if totalSessionCount > 0 {
+                            Text("\(totalSessionCount)")
+                                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                                .foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
+                        }
+                    }
 
                     // Permission indicator only (amber) - waiting for input shows checkmark on right
                     if hasPendingPermission {
@@ -270,7 +295,7 @@ struct NotchView: View {
                             .matchedGeometryEffect(id: "status-indicator", in: activityNamespace, isSource: showClosedActivity)
                     }
                 }
-                .frame(width: viewModel.status == .opened ? nil : sideWidth + (hasPendingPermission ? 18 : 0) + (totalSessionCount > 0 ? 12 : 0))
+                .frame(width: viewModel.status == .opened ? nil : sideWidth + (hasPendingPermission ? 18 : 0))
                 .padding(.leading, viewModel.status == .opened ? 8 : 0)
             }
 
@@ -290,25 +315,24 @@ struct NotchView: View {
                     .frame(width: closedNotchSize.width - cornerRadiusInsets.closed.top + (isBouncing ? 16 : 0))
             }
 
-            // Right side - spinner when processing/pending, checkmark when waiting for input + active count
+            // Right side - spinner/checkmark (with active count below)
             if showClosedActivity {
-                HStack(spacing: 4) {
+                VStack(spacing: 1) {
                     if isProcessing || hasPendingPermission {
                         ProcessingSpinner()
                             .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
                     } else if hasWaitingForInput {
-                        // Checkmark for waiting-for-input on the right side
                         ReadyForInputIndicatorIcon(size: 14, color: TerminalColors.green)
                             .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
                     }
 
                     if activeSessionCount > 0 {
                         Text("\(activeSessionCount)")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .font(.system(size: 7, weight: .bold, design: .monospaced))
                             .foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
                     }
                 }
-                .frame(width: viewModel.status == .opened ? nil : sideWidth + (activeSessionCount > 0 ? 12 : 0))
+                .frame(width: viewModel.status == .opened ? nil : sideWidth)
             }
         }
         .frame(height: closedNotchSize.height)
@@ -422,7 +446,7 @@ struct NotchView: View {
             // Don't hide on non-notched devices - users need a visible target
             if viewModel.status == .closed && viewModel.hasPhysicalNotch {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    if !isAnyProcessing && !hasPendingPermission && !hasWaitingForInput && viewModel.status == .closed {
+                    if !isAnyProcessing && !hasPendingPermission && !hasWaitingForInput && !menuBarDetector.isMenuBarHidden && viewModel.status == .closed {
                         isVisible = false
                     }
                 }
@@ -442,7 +466,7 @@ struct NotchView: View {
             // Don't hide on non-notched devices - users need a visible target
             guard viewModel.hasPhysicalNotch else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                if viewModel.status == .closed && !isAnyProcessing && !hasPendingPermission && !hasWaitingForInput && !activityCoordinator.expandingActivity.show {
+                if viewModel.status == .closed && !isAnyProcessing && !hasPendingPermission && !hasWaitingForInput && !menuBarDetector.isMenuBarHidden && !activityCoordinator.expandingActivity.show {
                     isVisible = false
                 }
             }

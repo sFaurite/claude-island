@@ -422,7 +422,6 @@ struct ChatView: View {
     /// Bar for interactive tools like AskUserQuestion that need terminal input
     private var interactivePromptBar: some View {
         ChatInteractivePromptBar(
-            isInTmux: session.isInTmux,
             onGoToTerminal: { focusTerminal() }
         )
     }
@@ -446,10 +445,26 @@ struct ChatView: View {
 
     private func focusTerminal() {
         Task {
+            // Try to find the terminal app from the Claude process tree
             if let pid = session.pid {
-                _ = await YabaiController.shared.focusWindow(forClaudePid: pid)
-            } else {
-                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
+                let tree = ProcessTreeBuilder.shared.buildTree()
+                if let terminalPid = ProcessTreeBuilder.shared.findTerminalPid(forProcess: pid, tree: tree) {
+                    let apps = NSWorkspace.shared.runningApplications
+                    if let app = apps.first(where: { $0.processIdentifier == Int32(terminalPid) }) {
+                        app.activate()
+                        return
+                    }
+                }
+            }
+
+            // Fallback: activate any running terminal app from registry
+            let apps = NSWorkspace.shared.runningApplications
+            for app in apps {
+                if let bundleId = app.bundleIdentifier,
+                   TerminalAppRegistry.isTerminalBundle(bundleId) {
+                    app.activate()
+                    return
+                }
             }
         }
     }
@@ -983,7 +998,6 @@ struct InterruptedMessageView: View {
 
 /// Bar for interactive tools like AskUserQuestion that need terminal input
 struct ChatInteractivePromptBar: View {
-    let isInTmux: Bool
     let onGoToTerminal: () -> Void
 
     @State private var showContent = false
@@ -1008,9 +1022,7 @@ struct ChatInteractivePromptBar: View {
 
             // Terminal button on right (similar to Allow button)
             Button {
-                if isInTmux {
-                    onGoToTerminal()
-                }
+                onGoToTerminal()
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "terminal")
@@ -1018,10 +1030,10 @@ struct ChatInteractivePromptBar: View {
                     Text("Terminal")
                         .font(.system(size: 13, weight: .medium))
                 }
-                .foregroundColor(isInTmux ? .black : .white.opacity(0.4))
+                .foregroundColor(.black)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(isInTmux ? Color.white.opacity(0.95) : Color.white.opacity(0.1))
+                .background(Color.white.opacity(0.95))
                 .clipShape(Capsule())
             }
             .buttonStyle(.plain)
