@@ -76,21 +76,36 @@ struct NotchWingsView: View {
     let height: CGFloat
     var tick: Bool = false // triggers re-render for staleness
 
-    private let wingFont = Font.system(size: 10, weight: .medium, design: .monospaced)
+    @AppStorage("wingsLayout") private var wingsLayoutRaw: String = WingsLayout.both.rawValue
+    @AppStorage("wingsFontSize") private var fontSizeRaw: Double = 10
+
+    private var layout: WingsLayout { WingsLayout(rawValue: wingsLayoutRaw) ?? .both }
+    private var fontSize: CGFloat { CGFloat(fontSizeRaw) }
+    private var wingFont: Font { Font.system(size: fontSize, weight: .medium, design: .monospaced) }
+    private var smallFont: Font { Font.system(size: fontSize - 1, weight: .medium, design: .monospaced) }
+    private var boldFont: Font { Font.system(size: fontSize - 1, weight: .bold, design: .monospaced) }
     private let wingPadding: CGFloat = 8
     private let wingCornerRadius: CGFloat = 6
 
     var body: some View {
         let _ = tick // consumed to trigger re-render for staleness
         HStack(spacing: 0) {
-            leftWing
-                .frame(maxWidth: .infinity, alignment: .trailing)
+            if layout.showLeft {
+                leftWing
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                Spacer()
+            }
 
             Color.clear
                 .frame(width: notchWidth + 16)
 
-            rightWing
-                .frame(maxWidth: .infinity, alignment: .leading)
+            if layout.showRight {
+                rightWing
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Spacer()
+            }
         }
         .frame(height: height)
         .padding(.horizontal, 8)
@@ -107,9 +122,9 @@ struct NotchWingsView: View {
                 if rl.fetchedAt.timeIntervalSinceNow < -staleThreshold {
                     HStack(spacing: 3) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 8))
+                            .font(.system(size: fontSize - 2))
                         Text(formatElapsed(since: rl.fetchedAt))
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .font(smallFont)
                     }
                     .foregroundColor(TerminalColors.amber)
                 }
@@ -153,7 +168,7 @@ struct NotchWingsView: View {
 
                 // All-time tokens + today live tokens
                 Text("Σ " + formatTokens(st.totalTokensAllTime))
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .font(boldFont)
                     .foregroundColor(.white.opacity(0.5))
 
                 if st.todayLiveTokens > 0 {
@@ -162,7 +177,7 @@ struct NotchWingsView: View {
                         .foregroundColor(.white.opacity(0.2))
 
                     Text("⇡ " + formatTokens(st.todayLiveTokens))
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .font(boldFont)
                         .foregroundColor(.white.opacity(0.7))
                 }
 
@@ -173,7 +188,7 @@ struct NotchWingsView: View {
                 // Daily stats (with date prefix if not today)
                 if !st.isToday {
                     Text(formatShortDate(st.date))
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .font(boldFont)
                         .foregroundColor(.white.opacity(0.35))
                 }
 
@@ -204,9 +219,9 @@ struct NotchWingsView: View {
 
                     HStack(spacing: 2) {
                         Text("🏆")
-                            .font(.system(size: 7))
+                            .font(.system(size: fontSize - 3))
                         Text(formatShortDate(st.recordDate) + " " + formatTokens(st.recordTokens))
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .font(smallFont)
                     }
                     .foregroundColor(TerminalColors.amber.opacity(0.7))
                 }
@@ -240,17 +255,19 @@ struct NotchWingsView: View {
 
         return HStack(spacing: 4) {
             Text(label)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(boldFont)
                 .foregroundColor(.white.opacity(0.5))
 
             progressBar(utilization: utilization, expectedUtilization: expectedUtil)
 
-            Text("\(Int(utilization * 100))%")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
+            (Text("\(Int(utilization * 100))%")
                 .foregroundColor(colorForUtilization(utilization, expected: expectedUtil).opacity(0.9))
+            + Text(" \(formatResetTime(reset, forceUnit: forceUnit))")
+                .foregroundColor(.white.opacity(0.4)))
+                .font(smallFont)
 
-            Text(formatReset(reset, forceUnit: forceUnit))
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
+            Text("↻")
+                .font(smallFont)
                 .foregroundColor(.white.opacity(0.4))
         }
     }
@@ -258,11 +275,11 @@ struct NotchWingsView: View {
     private func overagePill(utilization: Double) -> some View {
         HStack(spacing: 4) {
             Text("ovg")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .font(boldFont)
                 .foregroundColor(TerminalColors.red.opacity(0.7))
 
             Text("\(Int(utilization * 100))%")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .font(smallFont)
                 .foregroundColor(TerminalColors.red.opacity(0.9))
         }
     }
@@ -326,23 +343,23 @@ struct NotchWingsView: View {
         return TerminalColors.red
     }
 
-    private func formatReset(_ date: Date, forceUnit: ResetUnit? = nil) -> String {
+    private func formatResetTime(_ date: Date, forceUnit: ResetUnit? = nil) -> String {
         let interval = date.timeIntervalSinceNow
-        guard interval > 0 else { return "↻" }
+        guard interval > 0 else { return "" }
 
         if forceUnit == .days {
             let days = interval / 86400
             if days >= 1 {
-                return String(format: "%.0fj ↻", days)
+                return String(format: "%.0fj", days)
             }
             // Less than 1 day: fall through to h/m format
         }
 
         let minutes = Int(interval) / 60
-        if minutes < 60 { return "\(max(1, minutes))m ↻" }
+        if minutes < 60 { return "\(max(1, minutes))m" }
         let hours = minutes / 60
-        if hours < 24 { return "\(hours)h ↻" }
-        return "\(hours / 24)j ↻"
+        if hours < 24 { return "\(hours)h" }
+        return "\(hours / 24)j"
     }
 
     private func formatShortDate(_ dateStr: String) -> String {

@@ -11,6 +11,28 @@ import SwiftUI
 import ServiceManagement
 import Sparkle
 
+// MARK: - Settings Tab
+
+enum SettingsTab: String, CaseIterable {
+    case appearance, shortcuts, system
+
+    var label: String {
+        switch self {
+        case .appearance: return "Appearance"
+        case .shortcuts:  return "Shortcuts"
+        case .system:     return "System"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .appearance: return "paintbrush"
+        case .shortcuts:  return "keyboard"
+        case .system:     return "gearshape"
+        }
+    }
+}
+
 // MARK: - NotchMenuView
 
 struct NotchMenuView: View {
@@ -22,6 +44,10 @@ struct NotchMenuView: View {
     @State private var launchAtLogin: Bool = false
     @State private var showTotalCount: Bool = AppSettings.showTotalSessionCount
     @State private var showActiveCount: Bool = AppSettings.showActiveSessionCount
+    @State private var selectedTab: SettingsTab = .appearance
+    @State private var showWings: Bool = AppSettings.showWingsInFullscreen
+    @State private var wingsFontSize: CGFloat = AppSettings.wingsFontSize
+    @State private var wingsLayout: WingsLayout = AppSettings.wingsLayout
 
     var body: some View {
         VStack(spacing: 4) {
@@ -37,92 +63,34 @@ struct NotchMenuView: View {
                 .background(Color.white.opacity(0.08))
                 .padding(.vertical, 4)
 
-            // Appearance settings
-            ScreenPickerRow(screenSelector: screenSelector)
-            SoundPickerRow(soundSelector: soundSelector)
-            ShortcutRecorderRow(
-                icon: "keyboard",
-                label: "Global Shortcut",
-                hotkeyID: 1,
-                getEnabled: { AppSettings.isShortcutEnabled },
-                setEnabled: { AppSettings.isShortcutEnabled = $0 },
-                getShortcut: { AppSettings.toggleShortcut },
-                setShortcut: { AppSettings.toggleShortcut = $0 }
-            )
-            ShortcutRecorderRow(
-                icon: "eye.slash",
-                label: "Hide Notch",
-                hotkeyID: 2,
-                getEnabled: { AppSettings.isHideShortcutEnabled },
-                setEnabled: { AppSettings.isHideShortcutEnabled = $0 },
-                getShortcut: { AppSettings.hideShortcut },
-                setShortcut: { AppSettings.hideShortcut = $0 }
-            )
-
-            MenuToggleRow(
-                icon: "number",
-                label: "Total Sessions",
-                isOn: showTotalCount
-            ) {
-                showTotalCount.toggle()
-                AppSettings.showTotalSessionCount = showTotalCount
-            }
-
-            MenuToggleRow(
-                icon: "bolt.fill",
-                label: "Active Sessions",
-                isOn: showActiveCount
-            ) {
-                showActiveCount.toggle()
-                AppSettings.showActiveSessionCount = showActiveCount
-            }
+            // Tab bar
+            SettingsTabBar(selectedTab: $selectedTab)
 
             Divider()
                 .background(Color.white.opacity(0.08))
                 .padding(.vertical, 4)
 
-            // System settings
-            MenuToggleRow(
-                icon: "power",
-                label: "Launch at Login",
-                isOn: launchAtLogin
-            ) {
-                do {
-                    if launchAtLogin {
-                        try SMAppService.mainApp.unregister()
-                        launchAtLogin = false
-                    } else {
-                        try SMAppService.mainApp.register()
-                        launchAtLogin = true
-                    }
-                } catch {
-                    print("Failed to toggle launch at login: \(error)")
+            // Tab content
+            Group {
+                switch selectedTab {
+                case .appearance:
+                    appearanceTab
+                case .shortcuts:
+                    shortcutsTab
+                case .system:
+                    systemTab
                 }
             }
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.15), value: selectedTab)
 
-            MenuToggleRow(
-                icon: "arrow.triangle.2.circlepath",
-                label: "Hooks",
-                isOn: hooksInstalled
-            ) {
-                if hooksInstalled {
-                    HookInstaller.uninstall()
-                    hooksInstalled = false
-                } else {
-                    HookInstaller.installIfNeeded()
-                    hooksInstalled = true
-                }
-            }
-
-            AccessibilityRow(isEnabled: AXIsProcessTrusted())
+            Spacer(minLength: 0)
 
             Divider()
                 .background(Color.white.opacity(0.08))
                 .padding(.vertical, 4)
 
-            // About
-            UpdateRow(updateManager: updateManager)
-
+            // Footer — always visible
             MenuRow(
                 icon: "star",
                 label: "Star on GitHub"
@@ -155,6 +123,108 @@ struct NotchMenuView: View {
                 refreshStates()
             }
         }
+        .onChange(of: selectedTab) { _, _ in
+            screenSelector.isPickerExpanded = false
+            soundSelector.isPickerExpanded = false
+        }
+    }
+
+    // MARK: - Tab Content
+
+    @ViewBuilder
+    private var appearanceTab: some View {
+        ScreenPickerRow(screenSelector: screenSelector)
+        SoundPickerRow(soundSelector: soundSelector)
+        MenuToggleRow(
+            icon: "number",
+            label: "Total Sessions",
+            isOn: showTotalCount
+        ) {
+            showTotalCount.toggle()
+            AppSettings.showTotalSessionCount = showTotalCount
+        }
+        MenuToggleRow(
+            icon: "bolt.fill",
+            label: "Active Sessions",
+            isOn: showActiveCount
+        ) {
+            showActiveCount.toggle()
+            AppSettings.showActiveSessionCount = showActiveCount
+        }
+        MenuToggleRow(
+            icon: "sidebar.squares.leading",
+            label: "Fullscreen Wings",
+            isOn: showWings
+        ) {
+            showWings.toggle()
+            AppSettings.showWingsInFullscreen = showWings
+        }
+        if showWings {
+            WingsLayoutRow(selected: $wingsLayout) { newValue in
+                AppSettings.wingsLayout = newValue
+            }
+            FontSizeRow(value: $wingsFontSize) { newValue in
+                AppSettings.wingsFontSize = newValue
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var shortcutsTab: some View {
+        ShortcutRecorderRow(
+            icon: "keyboard",
+            label: "Global Shortcut",
+            hotkeyID: 1,
+            getEnabled: { AppSettings.isShortcutEnabled },
+            setEnabled: { AppSettings.isShortcutEnabled = $0 },
+            getShortcut: { AppSettings.toggleShortcut },
+            setShortcut: { AppSettings.toggleShortcut = $0 }
+        )
+        ShortcutRecorderRow(
+            icon: "eye.slash",
+            label: "Hide Notch",
+            hotkeyID: 2,
+            getEnabled: { AppSettings.isHideShortcutEnabled },
+            setEnabled: { AppSettings.isHideShortcutEnabled = $0 },
+            getShortcut: { AppSettings.hideShortcut },
+            setShortcut: { AppSettings.hideShortcut = $0 }
+        )
+    }
+
+    @ViewBuilder
+    private var systemTab: some View {
+        MenuToggleRow(
+            icon: "power",
+            label: "Launch at Login",
+            isOn: launchAtLogin
+        ) {
+            do {
+                if launchAtLogin {
+                    try SMAppService.mainApp.unregister()
+                    launchAtLogin = false
+                } else {
+                    try SMAppService.mainApp.register()
+                    launchAtLogin = true
+                }
+            } catch {
+                print("Failed to toggle launch at login: \(error)")
+            }
+        }
+        MenuToggleRow(
+            icon: "arrow.triangle.2.circlepath",
+            label: "Hooks",
+            isOn: hooksInstalled
+        ) {
+            if hooksInstalled {
+                HookInstaller.uninstall()
+                hooksInstalled = false
+            } else {
+                HookInstaller.installIfNeeded()
+                hooksInstalled = true
+            }
+        }
+        AccessibilityRow(isEnabled: AXIsProcessTrusted())
+        UpdateRow(updateManager: updateManager)
     }
 
     private func refreshStates() {
@@ -514,6 +584,162 @@ struct MenuRow: View {
             return Color(red: 1.0, green: 0.4, blue: 0.4)
         }
         return .white.opacity(isHovered ? 1.0 : 0.7)
+    }
+}
+
+// MARK: - Settings Tab Bar
+
+private struct SettingsTabBar: View {
+    @Binding var selectedTab: SettingsTab
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(SettingsTab.allCases, id: \.self) { tab in
+                SettingsTabButton(
+                    tab: tab,
+                    isSelected: selectedTab == tab
+                ) {
+                    selectedTab = tab
+                }
+            }
+        }
+        .padding(.horizontal, 4)
+    }
+}
+
+private struct SettingsTabButton: View {
+    let tab: SettingsTab
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: tab.icon)
+                    .font(.system(size: 12))
+                Text(tab.label)
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundColor(isSelected ? TerminalColors.green : .white.opacity(isHovered ? 0.8 : 0.5))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(isSelected ? Color.white.opacity(0.10) : (isHovered ? Color.white.opacity(0.05) : Color.clear))
+            )
+            .overlay(alignment: .bottom) {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(TerminalColors.green)
+                        .frame(width: 24, height: 2)
+                        .offset(y: -1)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - Wings Layout Row
+
+private struct WingsLayoutRow: View {
+    @Binding var selected: WingsLayout
+    let onChange: (WingsLayout) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "rectangle.split.3x1")
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.7))
+                .frame(width: 16)
+
+            Text("Layout")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+
+            Spacer()
+
+            HStack(spacing: 2) {
+                ForEach(WingsLayout.allCases, id: \.self) { layout in
+                    WingsLayoutButton(
+                        layout: layout,
+                        isSelected: selected == layout
+                    ) {
+                        selected = layout
+                        onChange(layout)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+}
+
+private struct WingsLayoutButton: View {
+    let layout: WingsLayout
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: layout.icon)
+                    .font(.system(size: 10))
+                Text(layout.label)
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundColor(isSelected ? TerminalColors.green : .white.opacity(isHovered ? 0.7 : 0.4))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? Color.white.opacity(0.10) : (isHovered ? Color.white.opacity(0.05) : Color.clear))
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+    }
+}
+
+// MARK: - Font Size Row
+
+private struct FontSizeRow: View {
+    @Binding var value: CGFloat
+    let onChange: (CGFloat) -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "textformat.size")
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.7))
+                .frame(width: 16)
+
+            Text("Font Size")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+
+            Spacer()
+
+            Text("\(Int(value))pt")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.5))
+                .frame(width: 30, alignment: .trailing)
+
+            Slider(value: $value, in: 8...14, step: 1)
+                .frame(width: 80)
+                .tint(TerminalColors.green)
+                .onChange(of: value) { _, newValue in
+                    onChange(newValue)
+                }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 }
 

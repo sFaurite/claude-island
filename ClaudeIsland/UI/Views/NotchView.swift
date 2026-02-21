@@ -28,6 +28,7 @@ struct NotchView: View {
     @State private var isVisible: Bool = false
     @State private var isHovering: Bool = false
     @State private var isBouncing: Bool = false
+    @AppStorage("showWingsInFullscreen") private var showWingsInFullscreen: Bool = true
 
     @Namespace private var activityNamespace
 
@@ -59,6 +60,30 @@ struct NotchView: View {
     private var totalSessionCount: Int { AppSettings.showTotalSessionCount ? sessionMonitor.instances.count : 0 }
     private var activeSessionCount: Int { AppSettings.showActiveSessionCount ? sessionMonitor.instances.filter { $0.phase.isActive }.count : 0 }
 
+    private var processingCount: Int {
+        sessionMonitor.instances.filter { $0.phase.isActive }.count
+    }
+
+    private var permissionCount: Int {
+        sessionMonitor.instances.filter { $0.phase.isWaitingForApproval }.count
+    }
+
+    private var waitingForInputCount: Int {
+        let now = Date()
+        let displayDuration: TimeInterval = 30
+        return sessionMonitor.instances.filter { session in
+            guard session.phase == .waitingForInput else { return false }
+            if let enteredAt = waitingForInputTimestamps[session.stableId] {
+                return now.timeIntervalSince(enteredAt) < displayDuration
+            }
+            return false
+        }.count
+    }
+
+    private var rightPillCount: Int {
+        (isAnyProcessing ? 1 : 0) + (hasPendingPermission ? 1 : 0) + (hasWaitingForInput ? 1 : 0)
+    }
+
     // MARK: - Sizing
 
     private var closedNotchSize: CGSize {
@@ -70,33 +95,11 @@ struct NotchView: View {
 
     /// Extra width for expanding activities (like Dynamic Island)
     private var expansionWidth: CGFloat {
-        // Permission indicator adds width on left side only
-        let permissionIndicatorWidth: CGFloat = hasPendingPermission ? 18 : 0
-
-        // Counters are stacked below icons — no extra horizontal width needed
-
-        // Expand for processing activity
-        if activityCoordinator.expandingActivity.show {
-            switch activityCoordinator.expandingActivity.type {
-            case .claude:
-                let baseWidth = 2 * max(0, closedNotchSize.height - 12) + 20
-                return baseWidth + permissionIndicatorWidth
-            case .none:
-                break
-            }
-        }
-
-        // Expand for pending permissions (left indicator) or waiting for input (checkmark on right)
-        if hasPendingPermission {
-            return 2 * max(0, closedNotchSize.height - 12) + 20 + permissionIndicatorWidth
-        }
-
-        // Waiting for input just shows checkmark on right, no extra left indicator
-        if hasWaitingForInput {
-            return 2 * max(0, closedNotchSize.height - 12) + 20
-        }
-
-        return 0
+        guard showClosedActivity else { return 0 }
+        let pillSpacing: CGFloat = 6
+        let leftWidth = sideWidth
+        let rightWidth = CGFloat(rightPillCount) * sideWidth + CGFloat(max(0, rightPillCount - 1)) * pillSpacing
+        return leftWidth + rightWidth
     }
 
     private var notchSize: CGSize {
@@ -142,8 +145,8 @@ struct NotchView: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            // Wings — behind the notch, only when menu bar is hidden and notch is closed
-            if menuBarDetector.isMenuBarHidden && viewModel.status == .closed {
+            // Wings — behind the notch, visible when menu bar is hidden (fullscreen)
+            if menuBarDetector.isMenuBarHidden && showWingsInFullscreen {
                 NotchWingsView(
                     rateLimits: wingsController.rateLimits,
                     stats: wingsController.stats,
@@ -190,6 +193,7 @@ struct NotchView: View {
                     .animation(.smooth, value: activityCoordinator.expandingActivity)
                     .animation(.smooth, value: hasPendingPermission)
                     .animation(.smooth, value: hasWaitingForInput)
+                    .animation(.smooth, value: isAnyProcessing)
                     .animation(.spring(response: 0.3, dampingFraction: 0.5), value: isBouncing)
                     .contentShape(Rectangle())
                     .onHover { hovering in
@@ -272,30 +276,27 @@ struct NotchView: View {
 
     // MARK: - Header Row (persists across states)
 
+    /// Width of the closed header content area (notch + expansion, minus horizontal padding)
+    private var closedHeaderWidth: CGFloat {
+        closedContentWidth - 2 * cornerRadiusInsets.closed.bottom
+    }
+
     @ViewBuilder
     private var headerRow: some View {
         HStack(spacing: 0) {
-            // Left side - crab (with count below) + optional permission indicator
+            // Left side - crab only (with total count below)
             if showClosedActivity {
-                HStack(spacing: 4) {
-                    VStack(spacing: 1) {
-                        ClaudeCrabIcon(size: 14, animateLegs: isProcessing)
-                            .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: showClosedActivity)
+                VStack(spacing: 1) {
+                    ClaudeCrabIcon(size: 14, animateLegs: isAnyProcessing)
+                        .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: showClosedActivity)
 
-                        if totalSessionCount > 0 {
-                            Text("\(totalSessionCount)")
-                                .font(.system(size: 7, weight: .bold, design: .monospaced))
-                                .foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
-                        }
-                    }
-
-                    // Permission indicator only (amber) - waiting for input shows checkmark on right
-                    if hasPendingPermission {
-                        PermissionIndicatorIcon(size: 14, color: Color(red: 0.85, green: 0.47, blue: 0.34))
-                            .matchedGeometryEffect(id: "status-indicator", in: activityNamespace, isSource: showClosedActivity)
+                    if totalSessionCount > 0 {
+                        Text("\(totalSessionCount)")
+                            .font(.system(size: 7, weight: .bold, design: .monospaced))
+                            .foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
                     }
                 }
-                .frame(width: viewModel.status == .opened ? nil : sideWidth + (hasPendingPermission ? 18 : 0))
+                .frame(width: viewModel.status == .opened ? nil : sideWidth)
                 .padding(.leading, viewModel.status == .opened ? 8 : 0)
             }
 
@@ -309,33 +310,56 @@ struct NotchView: View {
                     .fill(.clear)
                     .frame(width: closedNotchSize.width - 20)
             } else {
-                // Closed with activity: black spacer (with optional bounce)
-                Rectangle()
-                    .fill(.black)
-                    .frame(width: closedNotchSize.width - cornerRadiusInsets.closed.top + (isBouncing ? 16 : 0))
+                // Closed with activity: flexible spacer pushes left/right to edges
+                Spacer(minLength: 0)
             }
 
-            // Right side - spinner/checkmark (with active count below)
+            // Right side - HStack of conditional indicator pills
             if showClosedActivity {
-                VStack(spacing: 1) {
-                    if isProcessing || hasPendingPermission {
-                        ProcessingSpinner()
-                            .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
-                    } else if hasWaitingForInput {
-                        ReadyForInputIndicatorIcon(size: 14, color: TerminalColors.green)
-                            .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
+                HStack(spacing: 6) {
+                    if isAnyProcessing {
+                        VStack(spacing: 1) {
+                            ProcessingSpinner()
+                                .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
+                            if processingCount > 0 {
+                                Text("\(processingCount)")
+                                    .font(.system(size: 7, weight: .bold, design: .monospaced))
+                                    .foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
+                            }
+                        }
+                        .frame(width: viewModel.status == .opened ? nil : sideWidth)
                     }
-
-                    if activeSessionCount > 0 {
-                        Text("\(activeSessionCount)")
-                            .font(.system(size: 7, weight: .bold, design: .monospaced))
-                            .foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
+                    if hasPendingPermission {
+                        VStack(spacing: 1) {
+                            PermissionIndicatorIcon(size: 14, color: Color(red: 0.85, green: 0.47, blue: 0.34))
+                            if permissionCount > 0 {
+                                Text("\(permissionCount)")
+                                    .font(.system(size: 7, weight: .bold, design: .monospaced))
+                                    .foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
+                            }
+                        }
+                        .frame(width: viewModel.status == .opened ? nil : sideWidth)
+                    }
+                    if hasWaitingForInput {
+                        VStack(spacing: 1) {
+                            ReadyForInputIndicatorIcon(size: 14, color: TerminalColors.green)
+                            if waitingForInputCount > 0 {
+                                Text("\(waitingForInputCount)")
+                                    .font(.system(size: 7, weight: .bold, design: .monospaced))
+                                    .foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
+                            }
+                        }
+                        .frame(width: viewModel.status == .opened ? nil : sideWidth)
                     }
                 }
-                .frame(width: viewModel.status == .opened ? nil : sideWidth)
             }
         }
-        .frame(height: closedNotchSize.height)
+        .frame(
+            width: showClosedActivity && viewModel.status != .opened
+                ? closedHeaderWidth + (isBouncing ? 16 : 0)
+                : nil,
+            height: closedNotchSize.height
+        )
     }
 
     private var sideWidth: CGFloat {
@@ -364,13 +388,6 @@ struct NotchView: View {
             }
 
             Spacer()
-
-            // Active session count (left of menu button) - only when headerRow doesn't already show it
-            if activeSessionCount > 0 && !showClosedActivity {
-                Text("\(activeSessionCount)")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundColor(Color(red: 0.85, green: 0.47, blue: 0.34))
-            }
 
             // Menu toggle
             Button {

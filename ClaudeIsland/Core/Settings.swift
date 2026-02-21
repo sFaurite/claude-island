@@ -117,6 +117,30 @@ enum NotificationSound: String, CaseIterable {
     }
 }
 
+/// Which wings to display in fullscreen mode
+enum WingsLayout: String, CaseIterable {
+    case both, left, right
+
+    var label: String {
+        switch self {
+        case .both:  return "Both"
+        case .left:  return "Left"
+        case .right: return "Right"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .both:  return "rectangle.split.3x1"
+        case .left:  return "rectangle.lefthalf.filled"
+        case .right: return "rectangle.righthalf.filled"
+        }
+    }
+
+    var showLeft: Bool { self == .both || self == .left }
+    var showRight: Bool { self == .both || self == .right }
+}
+
 enum AppSettings {
     private static let defaults = UserDefaults.standard
 
@@ -131,6 +155,9 @@ enum AppSettings {
         static let showTotalSessionCount = "showTotalSessionCount"
         static let showActiveSessionCount = "showActiveSessionCount"
         static let maxNotificationVolume = "maxNotificationVolume"
+        static let showWingsInFullscreen = "showWingsInFullscreen"
+        static let wingsFontSize = "wingsFontSize"
+        static let wingsLayout = "wingsLayout"
     }
 
     // MARK: - Notification Sound
@@ -231,6 +258,44 @@ enum AppSettings {
         }
         set {
             defaults.set(newValue.rawValue, forKey: Keys.notificationSound)
+        }
+    }
+
+    // MARK: - Wings (Fullscreen)
+
+    /// Whether to show the notch wings in fullscreen mode
+    static var showWingsInFullscreen: Bool {
+        get {
+            if defaults.object(forKey: Keys.showWingsInFullscreen) == nil { return true }
+            return defaults.bool(forKey: Keys.showWingsInFullscreen)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.showWingsInFullscreen)
+        }
+    }
+
+    /// Font size for the notch wings content (8.0–14.0)
+    static var wingsFontSize: CGFloat {
+        get {
+            if defaults.object(forKey: Keys.wingsFontSize) == nil { return 10 }
+            return CGFloat(defaults.float(forKey: Keys.wingsFontSize))
+        }
+        set {
+            defaults.set(Float(newValue), forKey: Keys.wingsFontSize)
+        }
+    }
+
+    /// Which wings to show (both, left only, right only)
+    static var wingsLayout: WingsLayout {
+        get {
+            guard let rawValue = defaults.string(forKey: Keys.wingsLayout),
+                  let layout = WingsLayout(rawValue: rawValue) else {
+                return .both
+            }
+            return layout
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: Keys.wingsLayout)
         }
     }
 
