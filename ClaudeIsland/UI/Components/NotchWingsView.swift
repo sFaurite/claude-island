@@ -71,18 +71,19 @@ final class NotchWingsController: ObservableObject {
 
 enum WingSection: Equatable {
     case rateLimit5h, rateLimit7j, overage
-    case heatmap, tokens, daily, record
+    case heatmap, tokensAllTime, tokensToday, daily, record
 
     /// Map from element id to WingSection
     static func from(elementId: String) -> WingSection? {
         switch elementId {
-        case "5h":      return .rateLimit5h
-        case "7j":      return .rateLimit7j
-        case "heatmap": return .heatmap
-        case "tokens":  return .tokens
-        case "lastDay": return .daily
-        case "record":  return .record
-        default:        return nil
+        case "5h":            return .rateLimit5h
+        case "7j":            return .rateLimit7j
+        case "heatmap":       return .heatmap
+        case "tokensAllTime": return .tokensAllTime
+        case "tokensToday":   return .tokensToday
+        case "lastDay":       return .daily
+        case "record":        return .record
+        default:              return nil
         }
     }
 
@@ -90,7 +91,6 @@ enum WingSection: Equatable {
     func isLeft(in elements: [WingElement]) -> Bool {
         switch self {
         case .overage:
-            // Overage follows 5h's side, fallback to left
             return elements.first(where: { $0.id == "5h" })?.side == .left
         case .rateLimit5h:
             return elements.first(where: { $0.id == "5h" })?.side == .left
@@ -98,8 +98,10 @@ enum WingSection: Equatable {
             return elements.first(where: { $0.id == "7j" })?.side == .left
         case .heatmap:
             return elements.first(where: { $0.id == "heatmap" })?.side == .left
-        case .tokens:
-            return elements.first(where: { $0.id == "tokens" })?.side == .left
+        case .tokensAllTime:
+            return elements.first(where: { $0.id == "tokensAllTime" })?.side == .left
+        case .tokensToday:
+            return elements.first(where: { $0.id == "tokensToday" })?.side == .left
         case .daily:
             return elements.first(where: { $0.id == "lastDay" })?.side == .left
         case .record:
@@ -254,7 +256,7 @@ struct NotchWingsView: View {
         let hasRateLimits = rateLimits != nil
         let hasStats = stats != nil
         let needsData = visibleElements.contains { ["5h", "7j"].contains($0.id) } ? hasRateLimits : true
-        let needsStats = visibleElements.contains { ["heatmap", "tokens", "lastDay", "record"].contains($0.id) } ? hasStats : true
+        let needsStats = visibleElements.contains { ["heatmap", "tokensAllTime", "tokensToday", "lastDay", "record"].contains($0.id) } ? hasStats : true
 
         if visibleElements.isEmpty || (!needsData && !needsStats) {
             Text("—")
@@ -321,19 +323,20 @@ struct NotchWingsView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { toggleSection(.heatmap) }
             }
-        case "tokens":
+        case "tokensAllTime":
             if let st = stats {
-                HStack(spacing: 4) {
-                    Text("Σ " + formatTokens(st.totalTokensAllTime))
-                        .font(boldFont).foregroundColor(.white.opacity(0.5))
-                    if st.todayLiveTokens > 0 {
-                        Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
-                        Text("⇡ " + formatTokens(st.todayLiveTokens))
-                            .font(boldFont).foregroundColor(.white.opacity(0.7))
-                    }
-                }
-                .contentShape(Rectangle())
-                .onTapGesture { toggleSection(.tokens) }
+                Text("Σ " + formatTokens(st.totalTokensAllTime))
+                    .font(boldFont).foregroundColor(.white.opacity(0.5))
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleSection(.tokensAllTime) }
+            }
+        case "tokensToday":
+            if let st = stats {
+                let todayTokens = st.todayLiveTokens > 0 ? st.todayLiveTokens : st.totalTokens
+                Text("⇡ " + formatTokens(todayTokens))
+                    .font(boldFont).foregroundColor(.white.opacity(0.7))
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleSection(.tokensToday) }
             }
         case "lastDay":
             if let st = stats, let lastDate = st.lastDayDate {
@@ -471,9 +474,13 @@ struct NotchWingsView: View {
             if let st = stats {
                 heatmapDetail(st)
             }
-        case .tokens:
+        case .tokensAllTime:
             if let st = stats {
-                tokensDetail(st)
+                tokensAllTimeDetail(st)
+            }
+        case .tokensToday:
+            if let st = stats {
+                tokensTodayDetail(st)
             }
         case .daily:
             if let st = stats {
@@ -516,24 +523,19 @@ struct NotchWingsView: View {
         .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
     }
 
-    private func tokensDetail(_ st: DailyStats) -> some View {
+    private func tokensAllTimeDetail(_ st: DailyStats) -> some View {
         let dayCount = max(1, st.heatmapEntries.count)
         let avgPerDay = st.totalTokensAllTime / dayCount
 
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Tokens")
+            Text("Tokens — All Time")
                 .font(.system(size: fontSize, weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.7))
 
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("All-time").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("Total").font(smallFont).foregroundColor(.white.opacity(0.4))
                     Text(formatTokens(st.totalTokensAllTime))
-                        .font(boldFont).foregroundColor(.white.opacity(0.7))
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Aujourd'hui").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text(formatTokens(st.todayLiveTokens > 0 ? st.todayLiveTokens : st.totalTokens))
                         .font(boldFont).foregroundColor(.white.opacity(0.7))
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -547,7 +549,44 @@ struct NotchWingsView: View {
                 Text("\(dayCount) jours d'activité")
                     .font(smallFont).foregroundColor(.white.opacity(0.4))
                 Text("·").font(smallFont).foregroundColor(.white.opacity(0.2))
-                Text("\(st.totalMessagesAllTime) msgs all-time")
+                Text("\(st.totalMessagesAllTime) msgs")
+                    .font(smallFont).foregroundColor(.white.opacity(0.4))
+            }
+        }
+        .padding(10)
+        .background(wingBackground)
+        .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
+    }
+
+    private func tokensTodayDetail(_ st: DailyStats) -> some View {
+        let todayTokens = st.todayLiveTokens > 0 ? st.todayLiveTokens : st.totalTokens
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Tokens — Aujourd'hui")
+                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.7))
+
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tokens").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text(formatTokens(todayTokens))
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Messages").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("\(st.messageCount)")
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sessions").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("\(st.sessionCount)")
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
+            }
+
+            if st.recordTokens > 0 {
+                let pct = Double(todayTokens) / Double(st.recordTokens) * 100
+                Text("\(Int(pct))% du record (\(formatTokens(st.recordTokens)))")
                     .font(smallFont).foregroundColor(.white.opacity(0.4))
             }
         }

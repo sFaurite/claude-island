@@ -124,30 +124,32 @@ enum WingSide: String, Codable {
 }
 
 struct WingElement: Codable, Identifiable, Equatable {
-    let id: String        // "5h", "7j", "heatmap", "tokens", "lastDay", "record"
+    let id: String        // "5h", "7j", "heatmap", "tokensAllTime", "tokensToday", "lastDay", "record"
     var side: WingSide    // .left or .right
     var visible: Bool     // toggle on/off
 
     /// Display label for the element chip
     var label: String {
         switch id {
-        case "5h":      return "5h"
-        case "7j":      return "7j"
-        case "heatmap": return "Heatmap"
-        case "tokens":  return "Tokens"
-        case "lastDay": return "Last Day"
-        case "record":  return "Record"
-        default:        return id
+        case "5h":            return "5h"
+        case "7j":            return "7j"
+        case "heatmap":       return "Heatmap"
+        case "tokensAllTime": return "All Time"
+        case "tokensToday":   return "Today"
+        case "lastDay":       return "Last Day"
+        case "record":        return "Record"
+        default:              return id
         }
     }
 
     static let defaultElements: [WingElement] = [
-        WingElement(id: "5h",      side: .left,  visible: true),
-        WingElement(id: "7j",      side: .left,  visible: true),
-        WingElement(id: "heatmap", side: .right, visible: true),
-        WingElement(id: "tokens",  side: .right, visible: true),
-        WingElement(id: "lastDay", side: .right, visible: true),
-        WingElement(id: "record",  side: .right, visible: true),
+        WingElement(id: "5h",            side: .left,  visible: true),
+        WingElement(id: "7j",            side: .left,  visible: true),
+        WingElement(id: "heatmap",       side: .right, visible: true),
+        WingElement(id: "tokensAllTime", side: .right, visible: true),
+        WingElement(id: "tokensToday",   side: .right, visible: true),
+        WingElement(id: "lastDay",       side: .right, visible: true),
+        WingElement(id: "record",        side: .right, visible: true),
     ]
 }
 
@@ -347,7 +349,17 @@ enum AppSettings {
     static var wingsElements: [WingElement] {
         get {
             if let data = defaults.data(forKey: Keys.wingsElements),
-               let elements = try? JSONDecoder().decode([WingElement].self, from: data) {
+               var elements = try? JSONDecoder().decode([WingElement].self, from: data) {
+                // Migrate old "tokens" → "tokensAllTime" + "tokensToday"
+                if let idx = elements.firstIndex(where: { $0.id == "tokens" }) {
+                    let old = elements[idx]
+                    let allTime = WingElement(id: "tokensAllTime", side: old.side, visible: old.visible)
+                    let today = WingElement(id: "tokensToday", side: old.side, visible: old.visible)
+                    elements.replaceSubrange(idx...idx, with: [allTime, today])
+                    if let data = try? JSONEncoder().encode(elements) {
+                        defaults.set(data, forKey: Keys.wingsElements)
+                    }
+                }
                 return elements
             }
             // Migration: build from legacy booleans
@@ -367,13 +379,15 @@ enum AppSettings {
             return defaults.bool(forKey: key)
         }
 
+        let tokensVisible = legacyBool(Keys.wingsShowTokens)
         let elements: [WingElement] = [
-            WingElement(id: "5h",      side: .left,  visible: legacyBool(Keys.wingsShow5h)),
-            WingElement(id: "7j",      side: .left,  visible: legacyBool(Keys.wingsShow7j)),
-            WingElement(id: "heatmap", side: .right, visible: legacyBool(Keys.wingsShowHeatmap)),
-            WingElement(id: "tokens",  side: .right, visible: legacyBool(Keys.wingsShowTokens)),
-            WingElement(id: "lastDay", side: .right, visible: legacyBool(Keys.wingsShowDaily)),
-            WingElement(id: "record",  side: .right, visible: legacyBool(Keys.wingsShowRecord)),
+            WingElement(id: "5h",            side: .left,  visible: legacyBool(Keys.wingsShow5h)),
+            WingElement(id: "7j",            side: .left,  visible: legacyBool(Keys.wingsShow7j)),
+            WingElement(id: "heatmap",       side: .right, visible: legacyBool(Keys.wingsShowHeatmap)),
+            WingElement(id: "tokensAllTime", side: .right, visible: tokensVisible),
+            WingElement(id: "tokensToday",   side: .right, visible: tokensVisible),
+            WingElement(id: "lastDay",       side: .right, visible: legacyBool(Keys.wingsShowDaily)),
+            WingElement(id: "record",        side: .right, visible: legacyBool(Keys.wingsShowRecord)),
         ]
 
         // Persist the migrated data
