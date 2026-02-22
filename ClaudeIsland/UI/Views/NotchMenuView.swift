@@ -138,59 +138,64 @@ struct NotchMenuView: View {
 
     @ViewBuilder
     private var appearanceTab: some View {
-        ScreenPickerRow(screenSelector: screenSelector)
-        SoundPickerRow(soundSelector: soundSelector)
-        MenuToggleRow(
-            icon: "number",
-            label: "Total Sessions",
-            isOn: showTotalCount
-        ) {
-            showTotalCount.toggle()
-            AppSettings.showTotalSessionCount = showTotalCount
-        }
-        MenuToggleRow(
-            icon: "bolt.fill",
-            label: "Active Sessions",
-            isOn: showActiveCount
-        ) {
-            showActiveCount.toggle()
-            AppSettings.showActiveSessionCount = showActiveCount
-        }
-        MenuToggleRow(
-            icon: "sidebar.squares.leading",
-            label: "Fullscreen Wings",
-            isOn: showWings
-        ) {
-            showWings.toggle()
-            AppSettings.showWingsInFullscreen = showWings
-            viewModel.showWingsSettings = showWings
-        }
-        if showWings {
-            WingsLayoutRow(selected: $wingsLayout) { newValue in
-                AppSettings.wingsLayout = newValue
+        ScrollView {
+            VStack(spacing: 0) {
+                ScreenPickerRow(screenSelector: screenSelector)
+                SoundPickerRow(soundSelector: soundSelector)
+                MenuToggleRow(
+                    icon: "number",
+                    label: "Total Sessions",
+                    isOn: showTotalCount
+                ) {
+                    showTotalCount.toggle()
+                    AppSettings.showTotalSessionCount = showTotalCount
+                }
+                MenuToggleRow(
+                    icon: "bolt.fill",
+                    label: "Active Sessions",
+                    isOn: showActiveCount
+                ) {
+                    showActiveCount.toggle()
+                    AppSettings.showActiveSessionCount = showActiveCount
+                }
+                MenuToggleRow(
+                    icon: "sidebar.squares.leading",
+                    label: "Fullscreen Wings",
+                    isOn: showWings
+                ) {
+                    showWings.toggle()
+                    AppSettings.showWingsInFullscreen = showWings
+                    viewModel.showWingsSettings = showWings
+                }
+                if showWings {
+                    WingsLayoutRow(selected: $wingsLayout) { newValue in
+                        AppSettings.wingsLayout = newValue
+                    }
+                    FontSizeRow(value: $wingsFontSize) { newValue in
+                        AppSettings.wingsFontSize = newValue
+                    }
+                    WingsElementsRow(
+                        label: "Quotas",
+                        icon: "gauge.with.dots.needle.33percent",
+                        chips: [
+                            ("5h", $wingsShow5h, { AppSettings.wingsShow5h = $0 }),
+                            ("7j", $wingsShow7j, { AppSettings.wingsShow7j = $0 }),
+                        ]
+                    )
+                    WingsElementsRow(
+                        label: "Stats",
+                        icon: "chart.bar",
+                        chips: [
+                            ("Heatmap", $wingsShowHeatmap, { AppSettings.wingsShowHeatmap = $0 }),
+                            ("Tokens", $wingsShowTokens, { AppSettings.wingsShowTokens = $0 }),
+                            ("Daily", $wingsShowDaily, { AppSettings.wingsShowDaily = $0 }),
+                            ("Record", $wingsShowRecord, { AppSettings.wingsShowRecord = $0 }),
+                        ]
+                    )
+                }
             }
-            FontSizeRow(value: $wingsFontSize) { newValue in
-                AppSettings.wingsFontSize = newValue
-            }
-            WingsElementsRow(
-                label: "Quotas",
-                icon: "gauge.with.dots.needle.33percent",
-                chips: [
-                    ("5h", $wingsShow5h, { AppSettings.wingsShow5h = $0 }),
-                    ("7j", $wingsShow7j, { AppSettings.wingsShow7j = $0 }),
-                ]
-            )
-            WingsElementsRow(
-                label: "Stats",
-                icon: "chart.bar",
-                chips: [
-                    ("Heatmap", $wingsShowHeatmap, { AppSettings.wingsShowHeatmap = $0 }),
-                    ("Tokens", $wingsShowTokens, { AppSettings.wingsShowTokens = $0 }),
-                    ("Daily", $wingsShowDaily, { AppSettings.wingsShowDaily = $0 }),
-                    ("Record", $wingsShowRecord, { AppSettings.wingsShowRecord = $0 }),
-                ]
-            )
         }
+        .scrollIndicators(.hidden)
     }
 
     @ViewBuilder
