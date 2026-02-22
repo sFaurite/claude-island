@@ -40,7 +40,6 @@ struct NotchView: View {
     @State private var isVisible: Bool = false
     @State private var isHovering: Bool = false
     @State private var isBouncing: Bool = false
-    @State private var expandedWingSection: WingSection? = nil
     @AppStorage("showWingsInFullscreen") private var showWingsInFullscreen: Bool = true
 
     @Namespace private var activityNamespace
@@ -169,7 +168,7 @@ struct NotchView: View {
                     notchWidth: closedContentWidth,
                     height: closedNotchSize.height,
                     tick: wingsController.tick,
-                    expandedSection: $expandedWingSection,
+                    expandedSection: $viewModel.expandedWingSection,
                     expandedHeight: Binding(
                         get: { viewModel.wingsExpandedHeight },
                         set: { viewModel.wingsExpandedHeight = $0 }
@@ -245,12 +244,12 @@ struct NotchView: View {
             handleStatusChange(from: oldStatus, to: newStatus)
             // Collapse expanded wing when notch opens
             if newStatus == .opened {
-                expandedWingSection = nil
+                viewModel.expandedWingSection = nil
             }
         }
         .onChange(of: showWingsInFullscreen) { _, newValue in
             viewModel.wingsVisible = menuBarDetector.isMenuBarHidden && newValue
-            if !newValue { expandedWingSection = nil }
+            if !newValue { viewModel.expandedWingSection = nil }
         }
         .onChange(of: sessionMonitor.pendingInstances) { _, sessions in
             handlePendingSessionsChange(sessions)
@@ -265,7 +264,7 @@ struct NotchView: View {
                 isVisible = true
             } else {
                 wingsController.stopAutoRefresh()
-                expandedWingSection = nil
+                viewModel.expandedWingSection = nil
                 // Let handleProcessingChange decide visibility
                 handleProcessingChange()
             }

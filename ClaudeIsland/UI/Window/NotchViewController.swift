@@ -13,6 +13,10 @@ import SwiftUI
 class PassThroughHostingView<Content: View>: NSHostingView<Content> {
     var hitTestCheck: (NSPoint) -> Bool = { _ in false }
 
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        return true  // Handle first click directly, don't consume it for window activation
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         // Only accept hits within the allowed zones
         guard hitTestCheck(point) else {

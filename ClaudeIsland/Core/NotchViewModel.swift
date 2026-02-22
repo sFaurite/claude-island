@@ -51,6 +51,8 @@ class NotchViewModel: ObservableObject {
     @Published var showWingsSettings: Bool = AppSettings.showWingsInFullscreen
     @Published var wingsVisible: Bool = false
     @Published var wingsExpandedHeight: CGFloat = 0  // 0 = collapsed
+    @Published var isMouseOverWings: Bool = false
+    @Published var expandedWingSection: WingSection? = nil
 
     // MARK: - Dependencies
 
@@ -193,6 +195,27 @@ class NotchViewModel: ObservableObject {
 
         let newHovering = inNotch || inOpened
 
+        // Track whether mouse is over a wing bar (not the notch gap, not below)
+        if wingsVisible && status != .opened {
+            let wingsTop = screenRect.maxY
+            let wingsBottom = wingsTop - deviceNotchRect.height
+            let notchLeft = screenRect.midX - deviceNotchRect.width / 2 - 16
+            let notchRight = screenRect.midX + deviceNotchRect.width / 2 + 16
+            let inWingsVertical = location.y >= wingsBottom && location.y <= wingsTop
+            let inWingsHorizontal = location.x < notchLeft || location.x > notchRight
+            // Also include expanded detail panel area
+            let inExpandedArea = expandedWingSection != nil
+                && location.y >= (wingsBottom - wingsExpandedHeight)
+                && location.y < wingsBottom
+                && inWingsHorizontal
+            let overWings = (inWingsVertical && inWingsHorizontal) || inExpandedArea
+            if overWings != isMouseOverWings {
+                isMouseOverWings = overWings
+            }
+        } else if isMouseOverWings {
+            isMouseOverWings = false
+        }
+
         // Only update if changed to prevent unnecessary re-renders
         guard newHovering != isHovering else { return }
 
@@ -231,6 +254,23 @@ class NotchViewModel: ObservableObject {
         case .closed, .popping:
             if geometry.isPointInNotch(location) {
                 notchOpen(reason: .click)
+            }
+            // Collapse expanded wing section when clicking outside wings area
+            if expandedWingSection != nil {
+                let wingsTop = screenRect.maxY
+                let wingsBottom = wingsTop - deviceNotchRect.height - wingsExpandedHeight
+                let notchLeft = screenRect.midX - deviceNotchRect.width / 2 - 16
+                let notchRight = screenRect.midX + deviceNotchRect.width / 2 + 16
+                let inWingsHorizontal = location.x < notchLeft || location.x > notchRight
+                let wingsArea = CGRect(
+                    x: screenRect.minX,
+                    y: wingsBottom,
+                    width: screenRect.width,
+                    height: wingsTop - wingsBottom
+                )
+                if !wingsArea.contains(location) || !inWingsHorizontal {
+                    expandedWingSection = nil
+                }
             }
         }
     }
