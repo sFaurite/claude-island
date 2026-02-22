@@ -99,7 +99,10 @@ struct NotchView: View {
         let pillSpacing: CGFloat = 6
         let leftWidth = sideWidth
         let rightWidth = CGFloat(rightPillCount) * sideWidth + CGFloat(max(0, rightPillCount - 1)) * pillSpacing
-        return leftWidth + rightWidth
+        // Each side needs its content width PLUS the horizontal padding (14px)
+        // so content lands outside the physical notch (no-pixel zone)
+        let perSide = max(leftWidth, rightWidth) + cornerRadiusInsets.closed.bottom
+        return 2 * perSide
     }
 
     private var notchSize: CGSize {

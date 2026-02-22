@@ -9,7 +9,7 @@
 # Conçu pour tourner via cron toutes les heures. Le script Node gère
 # lui-même la mise à jour incrémentale de la base et le calcul live.
 #
-# Cron : 0 * * * * /Users/faurite/Documents/Outils/ClaudeIsland/claude-island/claude-stats-scheduler.sh
+# Cron : 0 * * * * /Users/faurite/Documents/Outils/ClaudeIsland/claude-island/scripts/claude-stats-scheduler.sh
 #
 # Fichier d'état : ~/.claude/stats-scheduler-state.json
 

@@ -83,7 +83,7 @@ struct ClaudeCrabIcon: View {
             }.applying(CGAffineTransform(scaleX: scale, y: scale).translatedBy(x: xOffset / scale, y: 0))
             context.fill(rightEye, with: .color(.black))
         }
-        .frame(width: size * (66.0 / 52.0), height: size)
+        .frame(width: size * (66.0 / 52.0) + 8, height: size)
         .onReceive(legTimer) { _ in
             if animateLegs {
                 legPhase = (legPhase + 1) % 4
