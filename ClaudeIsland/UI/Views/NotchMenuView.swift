@@ -188,7 +188,7 @@ struct NotchMenuView: View {
                         chips: [
                             ("Heatmap", $wingsShowHeatmap, { AppSettings.wingsShowHeatmap = $0 }),
                             ("Tokens", $wingsShowTokens, { AppSettings.wingsShowTokens = $0 }),
-                            ("Daily", $wingsShowDaily, { AppSettings.wingsShowDaily = $0 }),
+                            ("Last Day", $wingsShowDaily, { AppSettings.wingsShowDaily = $0 }),
                             ("Record", $wingsShowRecord, { AppSettings.wingsShowRecord = $0 }),
                         ]
                     )

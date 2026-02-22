@@ -283,20 +283,18 @@ struct NotchWingsView: View {
                 .allowsHitTesting(false)
         }
 
-        if showDaily {
+        if showDaily, let lastDate = st.lastDayDate {
             HStack(spacing: 4) {
-                if !st.isToday {
-                    Text(formatShortDate(st.date))
-                        .font(boldFont).foregroundColor(.white.opacity(0.35))
-                }
-                Text("\(st.messageCount) msgs")
-                    .font(wingFont).foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
+                Text(formatShortDate(lastDate))
+                    .font(boldFont).foregroundColor(.white.opacity(0.35))
+                Text("\(st.lastDayMessages) msgs")
+                    .font(wingFont).foregroundColor(.white.opacity(0.5))
                 Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
-                Text("\(st.sessionCount) sess")
-                    .font(wingFont).foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
+                Text("\(st.lastDaySessions) sess")
+                    .font(wingFont).foregroundColor(.white.opacity(0.5))
                 Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
-                Text(formatTokens(st.totalTokens))
-                    .font(wingFont).foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
+                Text(formatTokens(st.lastDayTokens))
+                    .font(wingFont).foregroundColor(.white.opacity(0.5))
             }
             .contentShape(Rectangle())
             .onTapGesture { toggleSection(.daily) }
@@ -496,31 +494,36 @@ struct NotchWingsView: View {
 
     private func dailyDetail(_ st: DailyStats) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(st.isToday ? "Aujourd'hui" : formatShortDate(st.date))
-                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.7))
+            if let lastDate = st.lastDayDate {
+                Text(formatShortDate(lastDate))
+                    .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.7))
 
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Messages").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text("\(st.messageCount)")
-                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                HStack(spacing: 16) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Messages").font(smallFont).foregroundColor(.white.opacity(0.4))
+                        Text("\(st.lastDayMessages)")
+                            .font(boldFont).foregroundColor(.white.opacity(0.7))
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Sessions").font(smallFont).foregroundColor(.white.opacity(0.4))
+                        Text("\(st.lastDaySessions)")
+                            .font(boldFont).foregroundColor(.white.opacity(0.7))
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Tool calls").font(smallFont).foregroundColor(.white.opacity(0.4))
+                        Text("\(st.lastDayToolCalls)")
+                            .font(boldFont).foregroundColor(.white.opacity(0.7))
+                    }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Tokens").font(smallFont).foregroundColor(.white.opacity(0.4))
+                        Text(formatTokens(st.lastDayTokens))
+                            .font(boldFont).foregroundColor(.white.opacity(0.7))
+                    }
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Sessions").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text("\(st.sessionCount)")
-                        .font(boldFont).foregroundColor(.white.opacity(0.7))
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Tool calls").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text("\(st.toolCallCount)")
-                        .font(boldFont).foregroundColor(.white.opacity(0.7))
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Tokens").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text(formatTokens(st.totalTokens))
-                        .font(boldFont).foregroundColor(.white.opacity(0.7))
-                }
+            } else {
+                Text("Pas de données")
+                    .font(smallFont).foregroundColor(.white.opacity(0.4))
             }
         }
         .padding(10)

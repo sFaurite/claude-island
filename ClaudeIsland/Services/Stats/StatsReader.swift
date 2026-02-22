@@ -28,6 +28,12 @@ struct DailyStats: Sendable {
     let date: String
     let isToday: Bool
     let heatmapEntries: [HeatmapEntry]
+    // Last non-empty day (excluding today)
+    let lastDayDate: String?
+    let lastDayMessages: Int
+    let lastDaySessions: Int
+    let lastDayToolCalls: Int
+    let lastDayTokens: Int
 }
 
 struct StatsReader: Sendable {
@@ -119,6 +125,12 @@ struct StatsReader: Sendable {
             recDate = today
         }
 
+        // Last non-empty day excluding today
+        let lastDay = cache.dailyActivity
+            .filter { $0.date != today && $0.messageCount > 0 }
+            .last
+        let lastDayTokenCount = lastDay.flatMap { tokensByDate[$0.date] } ?? 0
+
         return DailyStats(
             messageCount: activity?.messageCount ?? 0,
             sessionCount: activity?.sessionCount ?? 0,
@@ -132,7 +144,12 @@ struct StatsReader: Sendable {
             recordTokens: recTokens,
             date: date,
             isToday: isToday,
-            heatmapEntries: heatmap
+            heatmapEntries: heatmap,
+            lastDayDate: lastDay?.date,
+            lastDayMessages: lastDay?.messageCount ?? 0,
+            lastDaySessions: lastDay?.sessionCount ?? 0,
+            lastDayToolCalls: lastDay?.toolCallCount ?? 0,
+            lastDayTokens: lastDayTokenCount
         )
     }
 
