@@ -78,7 +78,7 @@ struct StatsReader: Sendable {
         let dayTokens = modelTokens?.tokensByModel.values.reduce(0, +) ?? 0
 
         // All-time tokens: sum inputTokens + outputTokens across all models
-        let allTimeTokens = cache.modelUsage.values.reduce(0) { sum, usage in
+        let allTimeCacheTokens = cache.modelUsage.values.reduce(0) { sum, usage in
             sum + usage.inputTokens + usage.outputTokens
         }
 
@@ -95,6 +95,9 @@ struct StatsReader: Sendable {
         }
 
         let liveTokens = readTodayLiveTokens()
+
+        // All-time = cache total + any live tokens beyond what cache already knows for today
+        let allTimeTokens = allTimeCacheTokens + max(0, liveTokens - dayTokens)
 
         // Record day (most tokens in a single day)
         var recDate = ""
