@@ -49,6 +49,8 @@ class NotchViewModel: ObservableObject {
     @Published var isWindowHidden: Bool = false
     @Published var selectedSettingsTab: SettingsTab = .appearance
     @Published var showWingsSettings: Bool = AppSettings.showWingsInFullscreen
+    @Published var wingsVisible: Bool = false
+    @Published var wingsExpandedHeight: CGFloat = 0  // 0 = collapsed
 
     // MARK: - Dependencies
 

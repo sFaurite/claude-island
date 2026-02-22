@@ -11,11 +11,11 @@ import SwiftUI
 /// Custom NSHostingView that only accepts mouse events within the panel bounds.
 /// Clicks outside the panel pass through to windows behind.
 class PassThroughHostingView<Content: View>: NSHostingView<Content> {
-    var hitTestRect: () -> CGRect = { .zero }
+    var hitTestCheck: (NSPoint) -> Bool = { _ in false }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        // Only accept hits within the panel rect
-        guard hitTestRect().contains(point) else {
+        // Only accept hits within the allowed zones
+        guard hitTestCheck(point) else {
             return nil  // Pass through to windows behind
         }
         return super.hitTest(point)
@@ -38,9 +38,9 @@ class NotchViewController: NSViewController {
     override func loadView() {
         hostingView = PassThroughHostingView(rootView: NotchView(viewModel: viewModel))
 
-        // Calculate the hit-test rect based on panel state
-        hostingView.hitTestRect = { [weak self] in
-            guard let self = self else { return .zero }
+        // Calculate whether a point is in a hittable zone based on panel state
+        hostingView.hitTestCheck = { [weak self] point in
+            guard let self = self else { return false }
             let vm = self.viewModel
             let geometry = vm.geometry
 
@@ -55,23 +55,39 @@ class NotchViewController: NSViewController {
                 let panelWidth = panelSize.width + 52  // Account for corner radius padding
                 let panelHeight = panelSize.height
                 let screenWidth = geometry.screenRect.width
-                return CGRect(
+                let panelRect = CGRect(
                     x: (screenWidth - panelWidth) / 2,
                     y: windowHeight - panelHeight,
                     width: panelWidth,
                     height: panelHeight
                 )
+                return panelRect.contains(point)
+
             case .closed, .popping:
-                // When closed, use the notch rect
+                // Notch zone
                 let notchRect = geometry.deviceNotchRect
                 let screenWidth = geometry.screenRect.width
-                // Add some padding for easier interaction
-                return CGRect(
+                let notchHitRect = CGRect(
                     x: (screenWidth - notchRect.width) / 2 - 10,
                     y: windowHeight - notchRect.height - 5,
                     width: notchRect.width + 20,
                     height: notchRect.height + 10
                 )
+                if notchHitRect.contains(point) { return true }
+
+                // Wings zone — full width, from top down to notch height + expanded height
+                if vm.wingsVisible {
+                    let wingsHeight = notchRect.height + vm.wingsExpandedHeight
+                    let wingsRect = CGRect(
+                        x: 0,
+                        y: windowHeight - wingsHeight,
+                        width: screenWidth,
+                        height: wingsHeight
+                    )
+                    return wingsRect.contains(point)
+                }
+
+                return false
             }
         }
 

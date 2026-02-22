@@ -62,11 +62,12 @@ class NotchWindowController: NSWindowController {
         notchWindow.setFrame(windowFrame, display: true)
 
         // Dynamically toggle mouse event handling based on notch state:
-        // - Closed: ignoresMouseEvents = true (clicks pass through to menu bar/apps)
+        // - Closed with wings visible: ignoresMouseEvents = false (wings are clickable)
+        // - Closed without wings: ignoresMouseEvents = true (clicks pass through to menu bar/apps)
         // - Opened: ignoresMouseEvents = false (buttons inside panel work)
-        viewModel.$status
+        Publishers.CombineLatest(viewModel.$status, viewModel.$wingsVisible)
             .receive(on: DispatchQueue.main)
-            .sink { [weak notchWindow, weak viewModel] status in
+            .sink { [weak notchWindow, weak viewModel] status, wingsVisible in
                 switch status {
                 case .opened:
                     // Accept mouse events when opened so buttons work
@@ -77,8 +78,9 @@ class NotchWindowController: NSWindowController {
                         notchWindow?.makeKey()
                     }
                 case .closed, .popping:
-                    // Ignore mouse events when closed so clicks pass through
-                    notchWindow?.ignoresMouseEvents = true
+                    // When wings are visible, accept mouse events so wings are clickable
+                    // The hit test will ensure clicks outside wings pass through
+                    notchWindow?.ignoresMouseEvents = !wingsVisible
                 }
             }
             .store(in: &cancellables)

@@ -67,6 +67,20 @@ final class NotchWingsController: ObservableObject {
     }
 }
 
+// MARK: - Wing Section
+
+enum WingSection: Equatable {
+    case rateLimit5h, rateLimit7j, overage
+    case heatmap, tokens, daily, record
+
+    var isLeft: Bool {
+        switch self {
+        case .rateLimit5h, .rateLimit7j, .overage: return true
+        case .heatmap, .tokens, .daily, .record: return false
+        }
+    }
+}
+
 // MARK: - Wings View
 
 struct NotchWingsView: View {
@@ -75,6 +89,8 @@ struct NotchWingsView: View {
     let notchWidth: CGFloat
     let height: CGFloat
     var tick: Bool = false // triggers re-render for staleness
+    @Binding var expandedSection: WingSection?
+    @Binding var expandedHeight: CGFloat
 
     @AppStorage("wingsLayout") private var wingsLayoutRaw: String = WingsLayout.both.rawValue
     @AppStorage("wingsFontSize") private var fontSizeRaw: Double = 10
@@ -92,38 +108,88 @@ struct NotchWingsView: View {
     private var boldFont: Font { Font.system(size: fontSize - 1, weight: .bold, design: .monospaced) }
     private let wingPadding: CGFloat = 8
     private let wingCornerRadius: CGFloat = 6
+    private let detailPanelHeight: CGFloat = 108
 
     var body: some View {
         let _ = tick // consumed to trigger re-render for staleness
-        HStack(spacing: 0) {
+        HStack(alignment: .top, spacing: 0) {
             if layout.showLeft {
-                leftWing
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                VStack(alignment: .trailing, spacing: 4) {
+                    leftWingBar
+                    if let section = expandedSection, section.isLeft {
+                        leftDetailPanel(for: section)
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .top).combined(with: .opacity),
+                                removal: .opacity
+                            ))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             } else {
                 Color.clear
                     .frame(maxWidth: .infinity)
+                    .allowsHitTesting(false)
             }
 
             Color.clear
-                .frame(width: notchWidth + 16)
+                .frame(width: notchWidth + 16, height: height)
+                .allowsHitTesting(false)
 
             if layout.showRight {
-                rightWing
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 4) {
+                    rightWingBar
+                    if let section = expandedSection, !section.isLeft {
+                        rightDetailPanel(for: section)
+                            .transition(.asymmetric(
+                                insertion: .move(edge: .top).combined(with: .opacity),
+                                removal: .opacity
+                            ))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Color.clear
                     .frame(maxWidth: .infinity)
+                    .allowsHitTesting(false)
             }
         }
-        .frame(height: height)
         .padding(.horizontal, 8)
+        .background(alignment: .top) {
+            Color.black
+                .frame(height: height)
+                .frame(maxWidth: .infinity)
+                .allowsHitTesting(false)
+        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: expandedSection)
+        .onChange(of: expandedSection) { _, newValue in
+            expandedHeight = newValue != nil ? detailPanelHeight + 8 : 0
+        }
     }
 
-    // MARK: - Left Wing (Rate Limits)
+    // MARK: - Toggle
+
+    private func toggleSection(_ section: WingSection) {
+        if expandedSection == section {
+            expandedSection = nil
+        } else {
+            expandedSection = section
+        }
+    }
+
+    private var wingBackground: some View {
+        RoundedRectangle(cornerRadius: wingCornerRadius)
+            .fill(.black.opacity(0.7))
+            .background(
+                RoundedRectangle(cornerRadius: wingCornerRadius)
+                    .fill(.ultraThinMaterial)
+            )
+    }
+
+    // MARK: - Left Wing Bar (Rate Limits)
 
     private let staleThreshold: TimeInterval = 600 // 10 minutes
 
-    private var leftWing: some View {
+    private var leftWingBar: some View {
         HStack(spacing: 8) {
             if let rl = rateLimits {
                 // Stale warning at the far left
@@ -135,16 +201,23 @@ struct NotchWingsView: View {
                             .font(smallFont)
                     }
                     .foregroundColor(TerminalColors.amber)
+                    .allowsHitTesting(false)
                 }
 
                 if show5h {
                     rateLimitPill(label: "5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, forceUnit: nil, windowSeconds: 5 * 3600)
+                        .contentShape(Rectangle())
+                        .onTapGesture { toggleSection(.rateLimit5h) }
                 }
                 if show7j {
                     rateLimitPill(label: "7j", utilization: rl.sevenDayUtilization, reset: rl.sevenDayReset, forceUnit: .days, windowSeconds: 7 * 86400)
+                        .contentShape(Rectangle())
+                        .onTapGesture { toggleSection(.rateLimit7j) }
                 }
                 if rl.overageUtilization > 0 {
                     overagePill(utilization: rl.overageUtilization)
+                        .contentShape(Rectangle())
+                        .onTapGesture { toggleSection(.overage) }
                 }
             } else {
                 Text("—")
@@ -154,23 +227,17 @@ struct NotchWingsView: View {
         }
         .padding(.horizontal, wingPadding)
         .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: wingCornerRadius)
-                .fill(.black.opacity(0.7))
-                .background(
-                    RoundedRectangle(cornerRadius: wingCornerRadius)
-                        .fill(.ultraThinMaterial)
-                )
-        )
+        .frame(height: height)
+        .background(wingBackground)
         .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
     }
 
-    // MARK: - Right Wing (Heatmap + Stats)
+    // MARK: - Right Wing Bar (Heatmap + Stats)
 
-    private var rightWing: some View {
+    private var rightWingBar: some View {
         HStack(spacing: 6) {
             if let st = stats {
-                rightWingContent(st)
+                rightWingBarContent(st)
             } else {
                 Text("—")
                     .font(wingFont)
@@ -179,101 +246,324 @@ struct NotchWingsView: View {
         }
         .padding(.horizontal, wingPadding)
         .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: wingCornerRadius)
-                .fill(.black.opacity(0.7))
-                .background(
-                    RoundedRectangle(cornerRadius: wingCornerRadius)
-                        .fill(.ultraThinMaterial)
-                )
-        )
+        .frame(height: height)
+        .background(wingBackground)
         .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
     }
 
     @ViewBuilder
-    private func rightWingContent(_ st: DailyStats) -> some View {
-        // Mini activity heatmap
+    private func rightWingBarContent(_ st: DailyStats) -> some View {
         if showHeatmap {
             ActivityHeatmap(entries: st.heatmapEntries)
+                .contentShape(Rectangle())
+                .onTapGesture { toggleSection(.heatmap) }
         }
 
-        // Separator line after heatmap (only if heatmap shown AND something follows)
         if showHeatmap && (showTokens || showDaily || showRecord) {
-            Rectangle()
-                .fill(.white.opacity(0.15))
-                .frame(width: 1, height: 20)
+            Rectangle().fill(.white.opacity(0.15)).frame(width: 1, height: 20)
+                .allowsHitTesting(false)
         }
 
-        // All-time tokens + today live tokens
         if showTokens {
-            Text("Σ " + formatTokens(st.totalTokensAllTime))
-                .font(boldFont)
-                .foregroundColor(.white.opacity(0.5))
-
-            if st.todayLiveTokens > 0 {
-                Text("·")
-                    .font(wingFont)
-                    .foregroundColor(.white.opacity(0.2))
-
-                Text("⇡ " + formatTokens(st.todayLiveTokens))
-                    .font(boldFont)
-                    .foregroundColor(.white.opacity(0.7))
+            HStack(spacing: 4) {
+                Text("Σ " + formatTokens(st.totalTokensAllTime))
+                    .font(boldFont).foregroundColor(.white.opacity(0.5))
+                if st.todayLiveTokens > 0 {
+                    Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
+                    Text("⇡ " + formatTokens(st.todayLiveTokens))
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
             }
+            .contentShape(Rectangle())
+            .onTapGesture { toggleSection(.tokens) }
         }
 
-        // Dot separator after tokens (only if tokens shown AND daily or record follows)
         if showTokens && (showDaily || showRecord) {
-            Text("·")
-                .font(wingFont)
-                .foregroundColor(.white.opacity(0.2))
+            Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
+                .allowsHitTesting(false)
         }
 
-        // Daily stats (msgs, sessions, total tokens)
         if showDaily {
-            if !st.isToday {
-                Text(formatShortDate(st.date))
-                    .font(boldFont)
-                    .foregroundColor(.white.opacity(0.35))
+            HStack(spacing: 4) {
+                if !st.isToday {
+                    Text(formatShortDate(st.date))
+                        .font(boldFont).foregroundColor(.white.opacity(0.35))
+                }
+                Text("\(st.messageCount) msgs")
+                    .font(wingFont).foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
+                Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
+                Text("\(st.sessionCount) sess")
+                    .font(wingFont).foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
+                Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
+                Text(formatTokens(st.totalTokens))
+                    .font(wingFont).foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
             }
-
-            Text("\(st.messageCount) msgs")
-                .font(wingFont)
-                .foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
-
-            Text("·")
-                .font(wingFont)
-                .foregroundColor(.white.opacity(0.2))
-
-            Text("\(st.sessionCount) sess")
-                .font(wingFont)
-                .foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
-
-            Text("·")
-                .font(wingFont)
-                .foregroundColor(.white.opacity(0.2))
-
-            Text(formatTokens(st.totalTokens))
-                .font(wingFont)
-                .foregroundColor(.white.opacity(st.isToday ? 0.7 : 0.5))
+            .contentShape(Rectangle())
+            .onTapGesture { toggleSection(.daily) }
         }
 
-        // Record
         if showRecord && st.recordTokens > 0 {
-            // Dot before record (only if something precedes)
             if showDaily || showTokens || showHeatmap {
-                Text("·")
-                    .font(wingFont)
-                    .foregroundColor(.white.opacity(0.2))
+                Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
+                    .allowsHitTesting(false)
             }
-
             HStack(spacing: 2) {
-                Text("🏆")
-                    .font(.system(size: fontSize - 3))
+                Text("🏆").font(.system(size: fontSize - 3))
                 Text(formatShortDate(st.recordDate) + " " + formatTokens(st.recordTokens))
                     .font(smallFont)
             }
             .foregroundColor(TerminalColors.amber.opacity(0.7))
+            .contentShape(Rectangle())
+            .onTapGesture { toggleSection(.record) }
         }
+    }
+
+    // MARK: - Left Detail Panel
+
+    @ViewBuilder
+    private func leftDetailPanel(for section: WingSection) -> some View {
+        if let rl = rateLimits {
+            switch section {
+            case .rateLimit5h:
+                rateLimitDetail(title: "Rate Limit 5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, windowSeconds: 5 * 3600)
+            case .rateLimit7j:
+                rateLimitDetail(title: "Rate Limit 7j", utilization: rl.sevenDayUtilization, reset: rl.sevenDayReset, windowSeconds: 7 * 86400)
+            case .overage:
+                overageDetail(utilization: rl.overageUtilization)
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private func rateLimitDetail(title: String, utilization: Double, reset: Date, windowSeconds: TimeInterval) -> some View {
+        let timeRemaining = max(0, reset.timeIntervalSinceNow)
+        let elapsed = windowSeconds - timeRemaining
+        let expectedUtil = min(1.0, max(0, elapsed / windowSeconds))
+        let isOverExpected = utilization > expectedUtil
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.7))
+
+            progressBar(utilization: utilization, expectedUtilization: expectedUtil, barWidth: 180, barHeight: 5)
+
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Utilisé").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("\(Int(utilization * 100))%")
+                        .font(boldFont)
+                        .foregroundColor(colorForUtilization(utilization, expected: expectedUtil))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Attendu").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("\(Int(expectedUtil * 100))%")
+                        .font(boldFont).foregroundColor(.white.opacity(0.6))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Reset").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text(formatDetailedResetTime(reset))
+                        .font(boldFont).foregroundColor(.white.opacity(0.6))
+                }
+            }
+
+            if isOverExpected {
+                Text("▲ +\(Int((utilization - expectedUtil) * 100))% au-dessus de l'attendu")
+                    .font(smallFont).foregroundColor(TerminalColors.red.opacity(0.8))
+            } else {
+                Text("✓ Sous le rythme attendu")
+                    .font(smallFont).foregroundColor(TerminalColors.green.opacity(0.8))
+            }
+        }
+        .padding(10)
+        .background(wingBackground)
+        .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
+    }
+
+    private func overageDetail(utilization: Double) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(TerminalColors.red)
+                Text("Overage Actif")
+                    .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                    .foregroundColor(TerminalColors.red.opacity(0.9))
+            }
+
+            progressBar(utilization: utilization, expectedUtilization: 0, barWidth: 180, barHeight: 5)
+
+            Text("Utilisation : \(Int(utilization * 100))%")
+                .font(boldFont).foregroundColor(TerminalColors.red.opacity(0.8))
+
+            Text("Dépassement du quota inclus")
+                .font(smallFont).foregroundColor(.white.opacity(0.5))
+        }
+        .padding(10)
+        .background(wingBackground)
+        .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
+    }
+
+    // MARK: - Right Detail Panel
+
+    @ViewBuilder
+    private func rightDetailPanel(for section: WingSection) -> some View {
+        if let st = stats {
+            switch section {
+            case .heatmap:
+                heatmapDetail(st)
+            case .tokens:
+                tokensDetail(st)
+            case .daily:
+                dailyDetail(st)
+            case .record:
+                recordDetail(st)
+            default:
+                EmptyView()
+            }
+        }
+    }
+
+    private func heatmapDetail(_ st: DailyStats) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Activité")
+                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.7))
+
+            HStack(alignment: .top, spacing: 4) {
+                VStack(spacing: 1) {
+                    ForEach(Array(["L", "Ma", "Me", "J", "V", "S", "D"].enumerated()), id: \.offset) { _, day in
+                        Text(day)
+                            .font(.system(size: 7, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.4))
+                            .frame(width: 12, height: 6)
+                    }
+                }
+                ActivityHeatmap(entries: st.heatmapEntries, cellSize: 6, cellGap: 1)
+            }
+
+            HStack(spacing: 8) {
+                Text("Moins").font(.system(size: 7)).foregroundColor(.white.opacity(0.4))
+                ForEach([0.06, 0.35, 0.55, 0.75, 1.0], id: \.self) { opacity in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(opacity == 0.06 ? .white.opacity(0.06) : TerminalColors.prompt.opacity(opacity))
+                        .frame(width: 8, height: 8)
+                }
+                Text("Plus").font(.system(size: 7)).foregroundColor(.white.opacity(0.4))
+            }
+        }
+        .padding(10)
+        .background(wingBackground)
+        .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
+    }
+
+    private func tokensDetail(_ st: DailyStats) -> some View {
+        let dayCount = max(1, st.heatmapEntries.count)
+        let avgPerDay = st.totalTokensAllTime / dayCount
+
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Tokens")
+                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.7))
+
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("All-time").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text(formatTokens(st.totalTokensAllTime))
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Aujourd'hui").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text(formatTokens(st.todayLiveTokens > 0 ? st.todayLiveTokens : st.totalTokens))
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Moy/jour").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("~" + formatTokens(avgPerDay))
+                        .font(boldFont).foregroundColor(.white.opacity(0.6))
+                }
+            }
+
+            HStack(spacing: 4) {
+                Text("\(dayCount) jours d'activité")
+                    .font(smallFont).foregroundColor(.white.opacity(0.4))
+                Text("·").font(smallFont).foregroundColor(.white.opacity(0.2))
+                Text("\(st.totalMessagesAllTime) msgs all-time")
+                    .font(smallFont).foregroundColor(.white.opacity(0.4))
+            }
+        }
+        .padding(10)
+        .background(wingBackground)
+        .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
+    }
+
+    private func dailyDetail(_ st: DailyStats) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(st.isToday ? "Aujourd'hui" : formatShortDate(st.date))
+                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.7))
+
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Messages").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("\(st.messageCount)")
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sessions").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("\(st.sessionCount)")
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tool calls").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("\(st.toolCallCount)")
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tokens").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text(formatTokens(st.totalTokens))
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
+            }
+        }
+        .padding(10)
+        .background(wingBackground)
+        .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
+    }
+
+    private func recordDetail(_ st: DailyStats) -> some View {
+        let todayTokens = st.todayLiveTokens > 0 ? st.todayLiveTokens : st.totalTokens
+        let pctOfRecord = st.recordTokens > 0 ? Double(todayTokens) / Double(st.recordTokens) * 100 : 0
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 4) {
+                Text("🏆").font(.system(size: fontSize))
+                Text("Record")
+                    .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                    .foregroundColor(TerminalColors.amber.opacity(0.9))
+            }
+
+            HStack(spacing: 16) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Date").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text(formatShortDate(st.recordDate))
+                        .font(boldFont).foregroundColor(TerminalColors.amber.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Tokens").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text(formatTokens(st.recordTokens))
+                        .font(boldFont).foregroundColor(TerminalColors.amber.opacity(0.7))
+                }
+            }
+
+            if st.isToday {
+                Text("Aujourd'hui : \(formatTokens(todayTokens)) (\(Int(pctOfRecord))% du record)")
+                    .font(smallFont).foregroundColor(.white.opacity(0.5))
+            }
+        }
+        .padding(10)
+        .background(wingBackground)
+        .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
     }
 
     // MARK: - Rate Limit Pill
@@ -318,7 +608,7 @@ struct NotchWingsView: View {
 
     // MARK: - Progress Bar
 
-    private func progressBar(utilization: Double, expectedUtilization: Double) -> some View {
+    private func progressBar(utilization: Double, expectedUtilization: Double, barWidth: CGFloat = 40, barHeight: CGFloat = 3) -> some View {
         GeometryReader { geo in
             let w = geo.size.width
             let actual = min(utilization, 1.0)
@@ -329,18 +619,18 @@ struct NotchWingsView: View {
                 // Background
                 Capsule()
                     .fill(.white.opacity(0.15))
-                    .frame(height: 3)
+                    .frame(height: barHeight)
 
                 if isOver {
                     // Green portion up to expected
                     Capsule()
                         .fill(TerminalColors.green)
-                        .frame(width: max(1, w * expected), height: 3)
+                        .frame(width: max(1, w * expected), height: barHeight)
 
                     // Red overshoot from expected to actual
                     Capsule()
                         .fill(TerminalColors.red)
-                        .frame(width: max(1, w * actual), height: 3)
+                        .frame(width: max(1, w * actual), height: barHeight)
                         .mask(
                             HStack(spacing: 0) {
                                 Color.clear.frame(width: w * expected)
@@ -351,17 +641,17 @@ struct NotchWingsView: View {
                     // All green — under expected
                     Capsule()
                         .fill(TerminalColors.green)
-                        .frame(width: max(1, w * actual), height: 3)
+                        .frame(width: max(1, w * actual), height: barHeight)
                 }
 
                 // Amber marker line at expected position
                 RoundedRectangle(cornerRadius: 0.5)
                     .fill(TerminalColors.amber)
-                    .frame(width: 1, height: 5)
+                    .frame(width: 1, height: barHeight + 2)
                     .offset(x: w * expected - 0.5)
             }
         }
-        .frame(width: 40, height: 5)
+        .frame(width: barWidth, height: barHeight + 2)
     }
 
     // MARK: - Helpers
@@ -400,6 +690,17 @@ struct NotchWingsView: View {
         return "\(parts[2])/\(parts[1])"
     }
 
+    private func formatDetailedResetTime(_ date: Date) -> String {
+        let interval = max(0, date.timeIntervalSinceNow)
+        let totalMinutes = Int(interval) / 60
+        let hours = totalMinutes / 60
+        let minutes = totalMinutes % 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        }
+        return "\(max(1, minutes))m"
+    }
+
     private func formatElapsed(since date: Date) -> String {
         let seconds = Int(-date.timeIntervalSinceNow)
         if seconds < 60 { return "\(seconds)s" }
@@ -425,16 +726,15 @@ struct NotchWingsView: View {
 
 private struct ActivityHeatmap: View {
     let entries: [HeatmapEntry]
-
-    private let cellSize: CGFloat = 3
-    private let cellGap: CGFloat = 1
+    var cellSize: CGFloat = 3
+    var cellGap: CGFloat = 1
 
     var body: some View {
         let grid = buildGrid()
         let maxCount = entries.map(\.messageCount).max() ?? 1
+        let step = cellSize + cellGap
 
         Canvas { context, size in
-            let step = cellSize + cellGap
             for col in 0..<grid.count {
                 for row in 0..<7 {
                     let x = CGFloat(col) * step
@@ -442,15 +742,15 @@ private struct ActivityHeatmap: View {
                     let rect = CGRect(x: x, y: y, width: cellSize, height: cellSize)
                     let count = grid[col][row]
                     context.fill(
-                        RoundedRectangle(cornerRadius: 0.5).path(in: rect),
+                        RoundedRectangle(cornerRadius: cellSize > 4 ? 1 : 0.5).path(in: rect),
                         with: .color(colorForCount(count, max: maxCount))
                     )
                 }
             }
         }
         .frame(
-            width: CGFloat(max(1, buildGrid().count)) * (cellSize + cellGap) - cellGap,
-            height: 7 * (cellSize + cellGap) - cellGap
+            width: CGFloat(max(1, grid.count)) * step - cellGap,
+            height: 7 * step - cellGap
         )
     }
 

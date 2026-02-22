@@ -16,6 +16,18 @@ private let cornerRadiusInsets = (
 )
 
 struct NotchView: View {
+    #if DEBUG
+    /// Build timestamp from the executable's modification date
+    private static let buildHash: String = {
+        guard let execURL = Bundle.main.executableURL,
+              let attrs = try? FileManager.default.attributesOfItem(atPath: execURL.path),
+              let modDate = attrs[.modificationDate] as? Date else { return "?" }
+        let fmt = DateFormatter()
+        fmt.dateFormat = "dd/MM HH:mm:ss"
+        return fmt.string(from: modDate)
+    }()
+    #endif
+
     @ObservedObject var viewModel: NotchViewModel
     @StateObject private var sessionMonitor = ClaudeSessionMonitor()
     @StateObject private var activityCoordinator = NotchActivityCoordinator.shared
@@ -28,6 +40,7 @@ struct NotchView: View {
     @State private var isVisible: Bool = false
     @State private var isHovering: Bool = false
     @State private var isBouncing: Bool = false
+    @State private var expandedWingSection: WingSection? = nil
     @AppStorage("showWingsInFullscreen") private var showWingsInFullscreen: Bool = true
 
     @Namespace private var activityNamespace
@@ -155,7 +168,12 @@ struct NotchView: View {
                     stats: wingsController.stats,
                     notchWidth: closedContentWidth,
                     height: closedNotchSize.height,
-                    tick: wingsController.tick
+                    tick: wingsController.tick,
+                    expandedSection: $expandedWingSection,
+                    expandedHeight: Binding(
+                        get: { viewModel.wingsExpandedHeight },
+                        set: { viewModel.wingsExpandedHeight = $0 }
+                    )
                 )
                 .transition(.opacity.animation(.easeInOut(duration: 0.3)))
             }
@@ -220,9 +238,19 @@ struct NotchView: View {
             if !viewModel.hasPhysicalNotch {
                 isVisible = true
             }
+            // Sync wings visibility
+            viewModel.wingsVisible = menuBarDetector.isMenuBarHidden && showWingsInFullscreen
         }
         .onChange(of: viewModel.status) { oldStatus, newStatus in
             handleStatusChange(from: oldStatus, to: newStatus)
+            // Collapse expanded wing when notch opens
+            if newStatus == .opened {
+                expandedWingSection = nil
+            }
+        }
+        .onChange(of: showWingsInFullscreen) { _, newValue in
+            viewModel.wingsVisible = menuBarDetector.isMenuBarHidden && newValue
+            if !newValue { expandedWingSection = nil }
         }
         .onChange(of: sessionMonitor.pendingInstances) { _, sessions in
             handlePendingSessionsChange(sessions)
@@ -237,9 +265,11 @@ struct NotchView: View {
                 isVisible = true
             } else {
                 wingsController.stopAutoRefresh()
+                expandedWingSection = nil
                 // Let handleProcessingChange decide visibility
                 handleProcessingChange()
             }
+            viewModel.wingsVisible = isHidden && showWingsInFullscreen
         }
     }
 
@@ -273,6 +303,14 @@ struct NotchView: View {
                             removal: .opacity.animation(.easeOut(duration: 0.15))
                         )
                     )
+
+                #if DEBUG
+                Text("build \(Self.buildHash)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.35))
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.top, 4)
+                #endif
             }
         }
     }
