@@ -757,12 +757,31 @@ private struct FontSizeRow: View {
 
 // MARK: - Wings Elements Editor (drag & drop between two lines)
 
+// Preference key to collect chip frames in the editor coordinate space
+private struct WingChipFrameKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
+// Preference key to collect line frames
+private struct WingLineFrameKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { $1 })
+    }
+}
+
 private struct WingsElementsEditor: View {
     @Binding var elements: [WingElement]
     let onChange: ([WingElement]) -> Void
 
     @State private var draggingId: String?
-    @State private var dragOffset: CGSize = .zero
+    @State private var dragLocation: CGPoint = .zero
+    @State private var dragGrabOffset: CGSize = .zero
+    @State private var chipFrames: [String: CGRect] = [:]
+    @State private var lineFrames: [String: CGRect] = [:]
 
     private var isDefault: Bool {
         elements == WingElement.defaultElements
@@ -781,14 +800,74 @@ private struct WingsElementsEditor: View {
                 }
             }
         }
+        .coordinateSpace(name: "wingsEditor")
+        .onPreferenceChange(WingChipFrameKey.self) { chipFrames = $0 }
+        .onPreferenceChange(WingLineFrameKey.self) { lineFrames = $0 }
+        // Gesture on the parent VStack — never destroyed when chips move between sides
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 8, coordinateSpace: .named("wingsEditor"))
+                .onChanged { value in
+                    if draggingId == nil {
+                        // Detect which chip was grabbed from start location
+                        for (id, frame) in chipFrames {
+                            if frame.contains(value.startLocation) {
+                                draggingId = id
+                                dragGrabOffset = CGSize(
+                                    width: value.startLocation.x - frame.midX,
+                                    height: value.startLocation.y - frame.midY
+                                )
+                                break
+                            }
+                        }
+                        guard draggingId != nil else { return }
+                    }
+                    dragLocation = value.location
+                    computeDropTarget(elementId: draggingId!)
+                }
+                .onEnded { _ in
+                    if draggingId != nil {
+                        onChange(elements)
+                    }
+                    draggingId = nil
+                }
+        )
+        .overlay {
+            if let id = draggingId, let element = elements.first(where: { $0.id == id }) {
+                floatingChip(element)
+                    .position(
+                        x: dragLocation.x - dragGrabOffset.width,
+                        y: dragLocation.y - dragGrabOffset.height
+                    )
+            }
+        }
+        .animation(.easeInOut(duration: 0.15), value: elements)
     }
+
+    // MARK: - Floating chip overlay
+
+    private func floatingChip(_ element: WingElement) -> some View {
+        Text(element.label)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundColor(element.visible ? TerminalColors.green : .white.opacity(0.5))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.white.opacity(0.15))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(TerminalColors.green.opacity(0.5), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.5), radius: 4, y: 2)
+            .scaleEffect(1.1)
+    }
+
+    // MARK: - Wing line
 
     @ViewBuilder
     private func wingLine(label: String, icon: String, side: WingSide) -> some View {
         let sideElements = elements.filter { $0.side == side }
-        // Highlight the other line when dragging from the opposite side
-        let isDropTarget = draggingId != nil
-            && elements.first(where: { $0.id == draggingId })?.side != side
 
         HStack(spacing: 10) {
             Image(systemName: icon)
@@ -804,20 +883,26 @@ private struct WingsElementsEditor: View {
 
             HStack(spacing: 2) {
                 ForEach(sideElements) { element in
-                    wingChip(element: element, side: side)
+                    wingChip(element: element)
                 }
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(isDropTarget ? Color.white.opacity(0.06) : Color.clear)
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: WingLineFrameKey.self,
+                    value: [side.rawValue: geo.frame(in: .named("wingsEditor"))]
+                )
+            }
         )
     }
 
+    // MARK: - Wing chip (in-flow, no DragGesture — gesture is on parent)
+
     @ViewBuilder
-    private func wingChip(element: WingElement, side: WingSide) -> some View {
+    private func wingChip(element: WingElement) -> some View {
         let isDragging = draggingId == element.id
 
         Text(element.label)
@@ -827,84 +912,76 @@ private struct WingsElementsEditor: View {
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(element.visible ? Color.white.opacity(0.10) : Color.clear)
+                    .fill(isDragging
+                          ? TerminalColors.green.opacity(0.08)
+                          : (element.visible ? Color.white.opacity(0.10) : Color.clear))
             )
-            .opacity(isDragging ? 0.4 : 1.0)
-            .offset(isDragging ? dragOffset : .zero)
-            .zIndex(isDragging ? 10 : 0)
-            .animation(.easeInOut(duration: 0.15), value: isDragging)
-            .gesture(
-                DragGesture(minimumDistance: 8)
-                    .onChanged { value in
-                        draggingId = element.id
-                        dragOffset = value.translation
-                    }
-                    .onEnded { value in
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            handleDragEnd(
-                                elementId: element.id,
-                                translation: value.translation,
-                                fromSide: side
-                            )
-                            draggingId = nil
-                            dragOffset = .zero
-                        }
-                    }
-            )
-            .simultaneousGesture(
-                TapGesture().onEnded {
-                    guard draggingId == nil else { return }
-                    if let idx = elements.firstIndex(where: { $0.id == element.id }) {
-                        elements[idx].visible.toggle()
-                        onChange(elements)
-                    }
+            .opacity(isDragging ? 0.3 : 1.0)
+            .background(
+                GeometryReader { geo in
+                    Color.clear.preference(
+                        key: WingChipFrameKey.self,
+                        value: [element.id: geo.frame(in: .named("wingsEditor"))]
+                    )
                 }
             )
+            .onTapGesture {
+                guard draggingId == nil else { return }
+                if let idx = elements.firstIndex(where: { $0.id == element.id }) {
+                    elements[idx].visible.toggle()
+                    onChange(elements)
+                }
+            }
     }
 
-    // MARK: - Drag Logic
+    // MARK: - Drop target computation
 
-    private func handleDragEnd(elementId: String, translation: CGSize, fromSide: WingSide) {
-        // Vertical drag (> 25pt) → switch side
-        if abs(translation.height) > 25 {
-            moveToSide(elementId: elementId, newSide: fromSide == .left ? .right : .left)
-            return
-        }
-        // Horizontal drag (> 30pt) → reorder within same side
-        if abs(translation.width) > 30 {
-            let steps = max(1, Int(abs(translation.width) / 40))
-            let direction: Int = translation.width > 0 ? 1 : -1
-            reorder(elementId: elementId, side: fromSide, direction: direction, steps: steps)
-        }
-    }
+    private func computeDropTarget(elementId: String) {
+        let leftFrame = lineFrames["left"] ?? .zero
+        let rightFrame = lineFrames["right"] ?? .zero
+        let cursorY = dragLocation.y - dragGrabOffset.height
 
-    private func moveToSide(elementId: String, newSide: WingSide) {
-        guard let idx = elements.firstIndex(where: { $0.id == elementId }) else { return }
-        var el = elements.remove(at: idx)
-        el.side = newSide
-        if let lastIdx = elements.lastIndex(where: { $0.side == newSide }) {
-            elements.insert(el, at: lastIdx + 1)
-        } else if newSide == .left {
-            elements.insert(el, at: 0)
+        // Determine target side from cursor proximity to each line
+        let targetSide: WingSide
+        let distToLeft = abs(cursorY - leftFrame.midY)
+        let distToRight = abs(cursorY - rightFrame.midY)
+        targetSide = distToLeft <= distToRight ? .left : .right
+
+        // Get other chips on target side for X-based positioning
+        let sideChips = elements.filter { $0.side == targetSide && $0.id != elementId }
+        let cursorX = dragLocation.x - dragGrabOffset.width
+
+        // Find insertion point: before the first chip whose center is right of cursor
+        var insertBeforeId: String? = nil
+        for chip in sideChips {
+            if let frame = chipFrames[chip.id], cursorX < frame.midX {
+                insertBeforeId = chip.id
+                break
+            }
+        }
+
+        // Build updated array
+        guard let sourceIdx = elements.firstIndex(where: { $0.id == elementId }) else { return }
+        var updated = elements
+        var el = updated.remove(at: sourceIdx)
+        el.side = targetSide
+
+        if let beforeId = insertBeforeId,
+           let insertIdx = updated.firstIndex(where: { $0.id == beforeId }) {
+            updated.insert(el, at: insertIdx)
         } else {
-            elements.append(el)
+            if let lastIdx = updated.lastIndex(where: { $0.side == targetSide }) {
+                updated.insert(el, at: lastIdx + 1)
+            } else if targetSide == .left {
+                updated.insert(el, at: 0)
+            } else {
+                updated.append(el)
+            }
         }
-        onChange(elements)
-    }
 
-    private func reorder(elementId: String, side: WingSide, direction: Int, steps: Int) {
-        let sideIds = elements.filter { $0.side == side }.map(\.id)
-        guard let sideIdx = sideIds.firstIndex(of: elementId) else { return }
-
-        let targetSideIdx = min(max(sideIdx + direction * steps, 0), sideIds.count - 1)
-        guard targetSideIdx != sideIdx else { return }
-
-        guard let fromIdx = elements.firstIndex(where: { $0.id == elementId }),
-              let toIdx = elements.firstIndex(where: { $0.id == sideIds[targetSideIdx] }) else { return }
-
-        elements.move(fromOffsets: IndexSet(integer: fromIdx),
-                      toOffset: toIdx > fromIdx ? toIdx + 1 : toIdx)
-        onChange(elements)
+        if updated != elements {
+            elements = updated
+        }
     }
 }
 
