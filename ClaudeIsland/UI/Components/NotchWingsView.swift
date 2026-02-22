@@ -73,10 +73,37 @@ enum WingSection: Equatable {
     case rateLimit5h, rateLimit7j, overage
     case heatmap, tokens, daily, record
 
-    var isLeft: Bool {
+    /// Map from element id to WingSection
+    static func from(elementId: String) -> WingSection? {
+        switch elementId {
+        case "5h":      return .rateLimit5h
+        case "7j":      return .rateLimit7j
+        case "heatmap": return .heatmap
+        case "tokens":  return .tokens
+        case "lastDay": return .daily
+        case "record":  return .record
+        default:        return nil
+        }
+    }
+
+    /// Determine side dynamically from wingsElements config
+    func isLeft(in elements: [WingElement]) -> Bool {
         switch self {
-        case .rateLimit5h, .rateLimit7j, .overage: return true
-        case .heatmap, .tokens, .daily, .record: return false
+        case .overage:
+            // Overage follows 5h's side, fallback to left
+            return elements.first(where: { $0.id == "5h" })?.side == .left
+        case .rateLimit5h:
+            return elements.first(where: { $0.id == "5h" })?.side == .left
+        case .rateLimit7j:
+            return elements.first(where: { $0.id == "7j" })?.side == .left
+        case .heatmap:
+            return elements.first(where: { $0.id == "heatmap" })?.side == .left
+        case .tokens:
+            return elements.first(where: { $0.id == "tokens" })?.side == .left
+        case .daily:
+            return elements.first(where: { $0.id == "lastDay" })?.side == .left
+        case .record:
+            return elements.first(where: { $0.id == "record" })?.side == .left
         }
     }
 }
@@ -94,15 +121,21 @@ struct NotchWingsView: View {
 
     @AppStorage("wingsLayout") private var wingsLayoutRaw: String = WingsLayout.both.rawValue
     @AppStorage("wingsFontSize") private var fontSizeRaw: Double = 10
-    @AppStorage("wingsShow5h") private var show5h: Bool = true
-    @AppStorage("wingsShow7j") private var show7j: Bool = true
-    @AppStorage("wingsShowHeatmap") private var showHeatmap: Bool = true
-    @AppStorage("wingsShowTokens") private var showTokens: Bool = true
-    @AppStorage("wingsShowDaily") private var showDaily: Bool = true
-    @AppStorage("wingsShowRecord") private var showRecord: Bool = true
+    @AppStorage("wingsElements") private var wingsElementsData: Data = {
+        (try? JSONEncoder().encode(WingElement.defaultElements)) ?? Data()
+    }()
 
     private var layout: WingsLayout { WingsLayout(rawValue: wingsLayoutRaw) ?? .both }
     private var fontSize: CGFloat { CGFloat(fontSizeRaw) }
+    private var wingsElements: [WingElement] {
+        (try? JSONDecoder().decode([WingElement].self, from: wingsElementsData)) ?? WingElement.defaultElements
+    }
+    private var leftElements: [WingElement] {
+        wingsElements.filter { $0.side == .left && $0.visible }
+    }
+    private var rightElements: [WingElement] {
+        wingsElements.filter { $0.side == .right && $0.visible }
+    }
     private var wingFont: Font { Font.system(size: fontSize, weight: .medium, design: .monospaced) }
     private var smallFont: Font { Font.system(size: fontSize - 1, weight: .medium, design: .monospaced) }
     private var boldFont: Font { Font.system(size: fontSize - 1, weight: .bold, design: .monospaced) }
@@ -116,7 +149,7 @@ struct NotchWingsView: View {
             if layout.showLeft {
                 VStack(alignment: .trailing, spacing: 4) {
                     leftWingBar
-                    if let section = expandedSection, section.isLeft {
+                    if let section = expandedSection, section.isLeft(in: wingsElements) {
                         leftDetailPanel(for: section)
                             .transition(.asymmetric(
                                 insertion: .move(edge: .top).combined(with: .opacity),
@@ -138,7 +171,7 @@ struct NotchWingsView: View {
             if layout.showRight {
                 VStack(alignment: .leading, spacing: 4) {
                     rightWingBar
-                    if let section = expandedSection, !section.isLeft {
+                    if let section = expandedSection, !section.isLeft(in: wingsElements) {
                         rightDetailPanel(for: section)
                             .transition(.asymmetric(
                                 insertion: .move(edge: .top).combined(with: .opacity),
@@ -191,39 +224,7 @@ struct NotchWingsView: View {
 
     private var leftWingBar: some View {
         HStack(spacing: 8) {
-            if let rl = rateLimits {
-                // Stale warning at the far left
-                if rl.fetchedAt.timeIntervalSinceNow < -staleThreshold {
-                    HStack(spacing: 3) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: fontSize - 2))
-                        Text(formatElapsed(since: rl.fetchedAt))
-                            .font(smallFont)
-                    }
-                    .foregroundColor(TerminalColors.amber)
-                    .allowsHitTesting(false)
-                }
-
-                if show5h {
-                    rateLimitPill(label: "5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, forceUnit: nil, windowSeconds: 5 * 3600)
-                        .contentShape(Rectangle())
-                        .onTapGesture { toggleSection(.rateLimit5h) }
-                }
-                if show7j {
-                    rateLimitPill(label: "7j", utilization: rl.sevenDayUtilization, reset: rl.sevenDayReset, forceUnit: .days, windowSeconds: 7 * 86400)
-                        .contentShape(Rectangle())
-                        .onTapGesture { toggleSection(.rateLimit7j) }
-                }
-                if rl.overageUtilization > 0 {
-                    overagePill(utilization: rl.overageUtilization)
-                        .contentShape(Rectangle())
-                        .onTapGesture { toggleSection(.overage) }
-                }
-            } else {
-                Text("—")
-                    .font(wingFont)
-                    .foregroundColor(.white.opacity(0.4))
-            }
+            dynamicWingContent(for: .left)
         }
         .padding(.horizontal, wingPadding)
         .padding(.vertical, 4)
@@ -236,13 +237,7 @@ struct NotchWingsView: View {
 
     private var rightWingBar: some View {
         HStack(spacing: 6) {
-            if let st = stats {
-                rightWingBarContent(st)
-            } else {
-                Text("—")
-                    .font(wingFont)
-                    .foregroundColor(.white.opacity(0.4))
-            }
+            dynamicWingContent(for: .right)
         }
         .padding(.horizontal, wingPadding)
         .padding(.vertical, 4)
@@ -251,68 +246,125 @@ struct NotchWingsView: View {
         .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
     }
 
+    // MARK: - Dynamic Wing Content
+
     @ViewBuilder
-    private func rightWingBarContent(_ st: DailyStats) -> some View {
-        if showHeatmap {
-            ActivityHeatmap(entries: st.heatmapEntries)
-                .contentShape(Rectangle())
-                .onTapGesture { toggleSection(.heatmap) }
-        }
+    private func dynamicWingContent(for side: WingSide) -> some View {
+        let visibleElements = wingsElements.filter { $0.side == side && $0.visible }
+        let hasRateLimits = rateLimits != nil
+        let hasStats = stats != nil
+        let needsData = visibleElements.contains { ["5h", "7j"].contains($0.id) } ? hasRateLimits : true
+        let needsStats = visibleElements.contains { ["heatmap", "tokens", "lastDay", "record"].contains($0.id) } ? hasStats : true
 
-        if showHeatmap && (showTokens || showDaily || showRecord) {
-            Rectangle().fill(.white.opacity(0.15)).frame(width: 1, height: 20)
-                .allowsHitTesting(false)
-        }
-
-        if showTokens {
-            HStack(spacing: 4) {
-                Text("Σ " + formatTokens(st.totalTokensAllTime))
-                    .font(boldFont).foregroundColor(.white.opacity(0.5))
-                if st.todayLiveTokens > 0 {
-                    Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
-                    Text("⇡ " + formatTokens(st.todayLiveTokens))
-                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+        if visibleElements.isEmpty || (!needsData && !needsStats) {
+            Text("—")
+                .font(wingFont)
+                .foregroundColor(.white.opacity(0.4))
+        } else {
+            // Stale warning for rate limits on this side
+            if let rl = rateLimits,
+               visibleElements.contains(where: { $0.id == "5h" || $0.id == "7j" }),
+               rl.fetchedAt.timeIntervalSinceNow < -staleThreshold {
+                HStack(spacing: 3) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: fontSize - 2))
+                    Text(formatElapsed(since: rl.fetchedAt))
+                        .font(smallFont)
                 }
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { toggleSection(.tokens) }
-        }
-
-        if showTokens && (showDaily || showRecord) {
-            Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
+                .foregroundColor(TerminalColors.amber)
                 .allowsHitTesting(false)
-        }
+            }
 
-        if showDaily, let lastDate = st.lastDayDate {
-            HStack(spacing: 4) {
-                Text(formatShortDate(lastDate))
-                    .font(boldFont).foregroundColor(.white.opacity(0.35))
-                Text("\(st.lastDayMessages) msgs")
-                    .font(wingFont).foregroundColor(.white.opacity(0.5))
-                Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
-                Text("\(st.lastDaySessions) sess")
-                    .font(wingFont).foregroundColor(.white.opacity(0.5))
-                Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
-                Text(formatTokens(st.lastDayTokens))
-                    .font(wingFont).foregroundColor(.white.opacity(0.5))
-            }
-            .contentShape(Rectangle())
-            .onTapGesture { toggleSection(.daily) }
-        }
+            ForEach(Array(visibleElements.enumerated()), id: \.element.id) { index, element in
+                if index > 0 {
+                    // Separator: vertical bar after heatmap, dot between others
+                    if element.id == "heatmap" || (index > 0 && visibleElements[index - 1].id == "heatmap") {
+                        Rectangle().fill(.white.opacity(0.15)).frame(width: 1, height: 20)
+                            .allowsHitTesting(false)
+                    } else {
+                        Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
+                            .allowsHitTesting(false)
+                    }
+                }
 
-        if showRecord && st.recordTokens > 0 {
-            if showDaily || showTokens || showHeatmap {
-                Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
-                    .allowsHitTesting(false)
+                wingElementView(for: element)
             }
-            HStack(spacing: 2) {
-                Text("🏆").font(.system(size: fontSize - 3))
-                Text(formatShortDate(st.recordDate) + " " + formatTokens(st.recordTokens))
-                    .font(smallFont)
+
+            // Overage pill (always follows rate limits if present on this side)
+            if let rl = rateLimits, rl.overageUtilization > 0,
+               visibleElements.contains(where: { $0.id == "5h" || $0.id == "7j" }) {
+                overagePill(utilization: rl.overageUtilization)
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleSection(.overage) }
             }
-            .foregroundColor(TerminalColors.amber.opacity(0.7))
-            .contentShape(Rectangle())
-            .onTapGesture { toggleSection(.record) }
+        }
+    }
+
+    @ViewBuilder
+    private func wingElementView(for element: WingElement) -> some View {
+        switch element.id {
+        case "5h":
+            if let rl = rateLimits {
+                rateLimitPill(label: "5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, forceUnit: nil, windowSeconds: 5 * 3600)
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleSection(.rateLimit5h) }
+            }
+        case "7j":
+            if let rl = rateLimits {
+                rateLimitPill(label: "7j", utilization: rl.sevenDayUtilization, reset: rl.sevenDayReset, forceUnit: .days, windowSeconds: 7 * 86400)
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleSection(.rateLimit7j) }
+            }
+        case "heatmap":
+            if let st = stats {
+                ActivityHeatmap(entries: st.heatmapEntries)
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleSection(.heatmap) }
+            }
+        case "tokens":
+            if let st = stats {
+                HStack(spacing: 4) {
+                    Text("Σ " + formatTokens(st.totalTokensAllTime))
+                        .font(boldFont).foregroundColor(.white.opacity(0.5))
+                    if st.todayLiveTokens > 0 {
+                        Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
+                        Text("⇡ " + formatTokens(st.todayLiveTokens))
+                            .font(boldFont).foregroundColor(.white.opacity(0.7))
+                    }
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { toggleSection(.tokens) }
+            }
+        case "lastDay":
+            if let st = stats, let lastDate = st.lastDayDate {
+                HStack(spacing: 4) {
+                    Text(formatShortDate(lastDate))
+                        .font(boldFont).foregroundColor(.white.opacity(0.35))
+                    Text("\(st.lastDayMessages) msgs")
+                        .font(wingFont).foregroundColor(.white.opacity(0.5))
+                    Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
+                    Text("\(st.lastDaySessions) sess")
+                        .font(wingFont).foregroundColor(.white.opacity(0.5))
+                    Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
+                    Text(formatTokens(st.lastDayTokens))
+                        .font(wingFont).foregroundColor(.white.opacity(0.5))
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { toggleSection(.daily) }
+            }
+        case "record":
+            if let st = stats, st.recordTokens > 0 {
+                HStack(spacing: 2) {
+                    Text("🏆").font(.system(size: fontSize - 3))
+                    Text(formatShortDate(st.recordDate) + " " + formatTokens(st.recordTokens))
+                        .font(smallFont)
+                }
+                .foregroundColor(TerminalColors.amber.opacity(0.7))
+                .contentShape(Rectangle())
+                .onTapGesture { toggleSection(.record) }
+            }
+        default:
+            EmptyView()
         }
     }
 
@@ -320,18 +372,7 @@ struct NotchWingsView: View {
 
     @ViewBuilder
     private func leftDetailPanel(for section: WingSection) -> some View {
-        if let rl = rateLimits {
-            switch section {
-            case .rateLimit5h:
-                rateLimitDetail(title: "Rate Limit 5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, windowSeconds: 5 * 3600)
-            case .rateLimit7j:
-                rateLimitDetail(title: "Rate Limit 7j", utilization: rl.sevenDayUtilization, reset: rl.sevenDayReset, windowSeconds: 7 * 86400)
-            case .overage:
-                overageDetail(utilization: rl.overageUtilization)
-            default:
-                EmptyView()
-            }
-        }
+        detailPanel(for: section)
     }
 
     private func rateLimitDetail(title: String, utilization: Double, reset: Date, windowSeconds: TimeInterval) -> some View {
@@ -406,18 +447,41 @@ struct NotchWingsView: View {
 
     @ViewBuilder
     private func rightDetailPanel(for section: WingSection) -> some View {
-        if let st = stats {
-            switch section {
-            case .heatmap:
+        detailPanel(for: section)
+    }
+
+    // MARK: - Unified Detail Panel
+
+    @ViewBuilder
+    private func detailPanel(for section: WingSection) -> some View {
+        switch section {
+        case .rateLimit5h:
+            if let rl = rateLimits {
+                rateLimitDetail(title: "Rate Limit 5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, windowSeconds: 5 * 3600)
+            }
+        case .rateLimit7j:
+            if let rl = rateLimits {
+                rateLimitDetail(title: "Rate Limit 7j", utilization: rl.sevenDayUtilization, reset: rl.sevenDayReset, windowSeconds: 7 * 86400)
+            }
+        case .overage:
+            if let rl = rateLimits {
+                overageDetail(utilization: rl.overageUtilization)
+            }
+        case .heatmap:
+            if let st = stats {
                 heatmapDetail(st)
-            case .tokens:
+            }
+        case .tokens:
+            if let st = stats {
                 tokensDetail(st)
-            case .daily:
+            }
+        case .daily:
+            if let st = stats {
                 dailyDetail(st)
-            case .record:
+            }
+        case .record:
+            if let st = stats {
                 recordDetail(st)
-            default:
-                EmptyView()
             }
         }
     }

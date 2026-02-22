@@ -117,6 +117,40 @@ enum NotificationSound: String, CaseIterable {
     }
 }
 
+// MARK: - Wing Elements
+
+enum WingSide: String, Codable {
+    case left, right
+}
+
+struct WingElement: Codable, Identifiable, Equatable {
+    let id: String        // "5h", "7j", "heatmap", "tokens", "lastDay", "record"
+    var side: WingSide    // .left or .right
+    var visible: Bool     // toggle on/off
+
+    /// Display label for the element chip
+    var label: String {
+        switch id {
+        case "5h":      return "5h"
+        case "7j":      return "7j"
+        case "heatmap": return "Heatmap"
+        case "tokens":  return "Tokens"
+        case "lastDay": return "Last Day"
+        case "record":  return "Record"
+        default:        return id
+        }
+    }
+
+    static let defaultElements: [WingElement] = [
+        WingElement(id: "5h",      side: .left,  visible: true),
+        WingElement(id: "7j",      side: .left,  visible: true),
+        WingElement(id: "heatmap", side: .right, visible: true),
+        WingElement(id: "tokens",  side: .right, visible: true),
+        WingElement(id: "lastDay", side: .right, visible: true),
+        WingElement(id: "record",  side: .right, visible: true),
+    ]
+}
+
 /// Which wings to display in fullscreen mode
 enum WingsLayout: String, CaseIterable {
     case both, left, right
@@ -158,6 +192,8 @@ enum AppSettings {
         static let showWingsInFullscreen = "showWingsInFullscreen"
         static let wingsFontSize = "wingsFontSize"
         static let wingsLayout = "wingsLayout"
+        static let wingsElements = "wingsElements"
+        // Legacy keys (used for migration only)
         static let wingsShow5h = "wingsShow5h"
         static let wingsShow7j = "wingsShow7j"
         static let wingsShowHeatmap = "wingsShowHeatmap"
@@ -305,60 +341,47 @@ enum AppSettings {
         }
     }
 
-    // MARK: - Wings Element Toggles
+    // MARK: - Wings Elements (ordered, side-assignable)
 
-    /// Whether to show the 5h rate limit in the left wing
-    static var wingsShow5h: Bool {
+    /// Ordered list of wing elements with side and visibility
+    static var wingsElements: [WingElement] {
         get {
-            if defaults.object(forKey: Keys.wingsShow5h) == nil { return true }
-            return defaults.bool(forKey: Keys.wingsShow5h)
+            if let data = defaults.data(forKey: Keys.wingsElements),
+               let elements = try? JSONDecoder().decode([WingElement].self, from: data) {
+                return elements
+            }
+            // Migration: build from legacy booleans
+            return migrateWingsElements()
         }
-        set { defaults.set(newValue, forKey: Keys.wingsShow5h) }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: Keys.wingsElements)
+            }
+        }
     }
 
-    /// Whether to show the 7j rate limit in the left wing
-    static var wingsShow7j: Bool {
-        get {
-            if defaults.object(forKey: Keys.wingsShow7j) == nil { return true }
-            return defaults.bool(forKey: Keys.wingsShow7j)
+    /// Migrate from legacy individual booleans to the new ordered array
+    private static func migrateWingsElements() -> [WingElement] {
+        func legacyBool(_ key: String) -> Bool {
+            if defaults.object(forKey: key) == nil { return true }
+            return defaults.bool(forKey: key)
         }
-        set { defaults.set(newValue, forKey: Keys.wingsShow7j) }
-    }
 
-    /// Whether to show the heatmap in the right wing
-    static var wingsShowHeatmap: Bool {
-        get {
-            if defaults.object(forKey: Keys.wingsShowHeatmap) == nil { return true }
-            return defaults.bool(forKey: Keys.wingsShowHeatmap)
-        }
-        set { defaults.set(newValue, forKey: Keys.wingsShowHeatmap) }
-    }
+        let elements: [WingElement] = [
+            WingElement(id: "5h",      side: .left,  visible: legacyBool(Keys.wingsShow5h)),
+            WingElement(id: "7j",      side: .left,  visible: legacyBool(Keys.wingsShow7j)),
+            WingElement(id: "heatmap", side: .right, visible: legacyBool(Keys.wingsShowHeatmap)),
+            WingElement(id: "tokens",  side: .right, visible: legacyBool(Keys.wingsShowTokens)),
+            WingElement(id: "lastDay", side: .right, visible: legacyBool(Keys.wingsShowDaily)),
+            WingElement(id: "record",  side: .right, visible: legacyBool(Keys.wingsShowRecord)),
+        ]
 
-    /// Whether to show the tokens (Σ + ⇡) in the right wing
-    static var wingsShowTokens: Bool {
-        get {
-            if defaults.object(forKey: Keys.wingsShowTokens) == nil { return true }
-            return defaults.bool(forKey: Keys.wingsShowTokens)
+        // Persist the migrated data
+        if let data = try? JSONEncoder().encode(elements) {
+            defaults.set(data, forKey: Keys.wingsElements)
         }
-        set { defaults.set(newValue, forKey: Keys.wingsShowTokens) }
-    }
 
-    /// Whether to show daily stats (msgs, sessions, total) in the right wing
-    static var wingsShowDaily: Bool {
-        get {
-            if defaults.object(forKey: Keys.wingsShowDaily) == nil { return true }
-            return defaults.bool(forKey: Keys.wingsShowDaily)
-        }
-        set { defaults.set(newValue, forKey: Keys.wingsShowDaily) }
-    }
-
-    /// Whether to show the record (🏆) in the right wing
-    static var wingsShowRecord: Bool {
-        get {
-            if defaults.object(forKey: Keys.wingsShowRecord) == nil { return true }
-            return defaults.bool(forKey: Keys.wingsShowRecord)
-        }
-        set { defaults.set(newValue, forKey: Keys.wingsShowRecord) }
+        return elements
     }
 
     // MARK: - Max Notification Volume

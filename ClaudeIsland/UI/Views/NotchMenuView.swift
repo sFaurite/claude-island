@@ -47,12 +47,7 @@ struct NotchMenuView: View {
     @State private var showWings: Bool = AppSettings.showWingsInFullscreen
     @State private var wingsFontSize: CGFloat = AppSettings.wingsFontSize
     @State private var wingsLayout: WingsLayout = AppSettings.wingsLayout
-    @State private var wingsShow5h: Bool = AppSettings.wingsShow5h
-    @State private var wingsShow7j: Bool = AppSettings.wingsShow7j
-    @State private var wingsShowHeatmap: Bool = AppSettings.wingsShowHeatmap
-    @State private var wingsShowTokens: Bool = AppSettings.wingsShowTokens
-    @State private var wingsShowDaily: Bool = AppSettings.wingsShowDaily
-    @State private var wingsShowRecord: Bool = AppSettings.wingsShowRecord
+    @State private var wingsElements: [WingElement] = AppSettings.wingsElements
 
     var body: some View {
         VStack(spacing: 4) {
@@ -174,24 +169,9 @@ struct NotchMenuView: View {
                     FontSizeRow(value: $wingsFontSize) { newValue in
                         AppSettings.wingsFontSize = newValue
                     }
-                    WingsElementsRow(
-                        label: "Quotas",
-                        icon: "gauge.with.dots.needle.33percent",
-                        chips: [
-                            ("5h", $wingsShow5h, { AppSettings.wingsShow5h = $0 }),
-                            ("7j", $wingsShow7j, { AppSettings.wingsShow7j = $0 }),
-                        ]
-                    )
-                    WingsElementsRow(
-                        label: "Stats",
-                        icon: "chart.bar",
-                        chips: [
-                            ("Heatmap", $wingsShowHeatmap, { AppSettings.wingsShowHeatmap = $0 }),
-                            ("Tokens", $wingsShowTokens, { AppSettings.wingsShowTokens = $0 }),
-                            ("Last Day", $wingsShowDaily, { AppSettings.wingsShowDaily = $0 }),
-                            ("Record", $wingsShowRecord, { AppSettings.wingsShowRecord = $0 }),
-                        ]
-                    )
+                    WingsElementsEditor(elements: $wingsElements) { newElements in
+                        AppSettings.wingsElements = newElements
+                    }
                 }
             }
         }
@@ -262,12 +242,7 @@ struct NotchMenuView: View {
         screenSelector.refreshScreens()
         showWings = AppSettings.showWingsInFullscreen
         viewModel.showWingsSettings = showWings
-        wingsShow5h = AppSettings.wingsShow5h
-        wingsShow7j = AppSettings.wingsShow7j
-        wingsShowHeatmap = AppSettings.wingsShowHeatmap
-        wingsShowTokens = AppSettings.wingsShowTokens
-        wingsShowDaily = AppSettings.wingsShowDaily
-        wingsShowRecord = AppSettings.wingsShowRecord
+        wingsElements = AppSettings.wingsElements
     }
 }
 
@@ -780,14 +755,41 @@ private struct FontSizeRow: View {
     }
 }
 
-// MARK: - Wings Elements Row
+// MARK: - Wings Elements Editor (drag & drop between two lines)
 
-private struct WingsElementsRow: View {
-    let label: String
-    let icon: String
-    let chips: [(String, Binding<Bool>, (Bool) -> Void)]
+private struct WingsElementsEditor: View {
+    @Binding var elements: [WingElement]
+    let onChange: ([WingElement]) -> Void
+
+    @State private var draggingId: String?
+    @State private var dragOffset: CGSize = .zero
+
+    private var isDefault: Bool {
+        elements == WingElement.defaultElements
+    }
 
     var body: some View {
+        VStack(spacing: 0) {
+            wingLine(label: "Left Wing", icon: "chevron.left", side: .left)
+            wingLine(label: "Right Wing", icon: "chevron.right", side: .right)
+            if !isDefault {
+                WingsResetButton {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        elements = WingElement.defaultElements
+                        onChange(elements)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func wingLine(label: String, icon: String, side: WingSide) -> some View {
+        let sideElements = elements.filter { $0.side == side }
+        // Highlight the other line when dragging from the opposite side
+        let isDropTarget = draggingId != nil
+            && elements.first(where: { $0.id == draggingId })?.side != side
+
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 12))
@@ -801,44 +803,136 @@ private struct WingsElementsRow: View {
             Spacer()
 
             HStack(spacing: 2) {
-                ForEach(Array(chips.enumerated()), id: \.offset) { _, chip in
-                    WingsElementChip(
-                        label: chip.0,
-                        isOn: chip.1,
-                        onChange: chip.2
-                    )
+                ForEach(sideElements) { element in
+                    wingChip(element: element, side: side)
                 }
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isDropTarget ? Color.white.opacity(0.06) : Color.clear)
+        )
+    }
+
+    @ViewBuilder
+    private func wingChip(element: WingElement, side: WingSide) -> some View {
+        let isDragging = draggingId == element.id
+
+        Text(element.label)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundColor(element.visible ? TerminalColors.green : .white.opacity(0.4))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(element.visible ? Color.white.opacity(0.10) : Color.clear)
+            )
+            .opacity(isDragging ? 0.4 : 1.0)
+            .offset(isDragging ? dragOffset : .zero)
+            .zIndex(isDragging ? 10 : 0)
+            .animation(.easeInOut(duration: 0.15), value: isDragging)
+            .gesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { value in
+                        draggingId = element.id
+                        dragOffset = value.translation
+                    }
+                    .onEnded { value in
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            handleDragEnd(
+                                elementId: element.id,
+                                translation: value.translation,
+                                fromSide: side
+                            )
+                            draggingId = nil
+                            dragOffset = .zero
+                        }
+                    }
+            )
+            .simultaneousGesture(
+                TapGesture().onEnded {
+                    guard draggingId == nil else { return }
+                    if let idx = elements.firstIndex(where: { $0.id == element.id }) {
+                        elements[idx].visible.toggle()
+                        onChange(elements)
+                    }
+                }
+            )
+    }
+
+    // MARK: - Drag Logic
+
+    private func handleDragEnd(elementId: String, translation: CGSize, fromSide: WingSide) {
+        // Vertical drag (> 25pt) → switch side
+        if abs(translation.height) > 25 {
+            moveToSide(elementId: elementId, newSide: fromSide == .left ? .right : .left)
+            return
+        }
+        // Horizontal drag (> 30pt) → reorder within same side
+        if abs(translation.width) > 30 {
+            let steps = max(1, Int(abs(translation.width) / 40))
+            let direction: Int = translation.width > 0 ? 1 : -1
+            reorder(elementId: elementId, side: fromSide, direction: direction, steps: steps)
+        }
+    }
+
+    private func moveToSide(elementId: String, newSide: WingSide) {
+        guard let idx = elements.firstIndex(where: { $0.id == elementId }) else { return }
+        var el = elements.remove(at: idx)
+        el.side = newSide
+        if let lastIdx = elements.lastIndex(where: { $0.side == newSide }) {
+            elements.insert(el, at: lastIdx + 1)
+        } else if newSide == .left {
+            elements.insert(el, at: 0)
+        } else {
+            elements.append(el)
+        }
+        onChange(elements)
+    }
+
+    private func reorder(elementId: String, side: WingSide, direction: Int, steps: Int) {
+        let sideIds = elements.filter { $0.side == side }.map(\.id)
+        guard let sideIdx = sideIds.firstIndex(of: elementId) else { return }
+
+        let targetSideIdx = min(max(sideIdx + direction * steps, 0), sideIds.count - 1)
+        guard targetSideIdx != sideIdx else { return }
+
+        guard let fromIdx = elements.firstIndex(where: { $0.id == elementId }),
+              let toIdx = elements.firstIndex(where: { $0.id == sideIds[targetSideIdx] }) else { return }
+
+        elements.move(fromOffsets: IndexSet(integer: fromIdx),
+                      toOffset: toIdx > fromIdx ? toIdx + 1 : toIdx)
+        onChange(elements)
     }
 }
 
-private struct WingsElementChip: View {
-    let label: String
-    @Binding var isOn: Bool
-    let onChange: (Bool) -> Void
-
+private struct WingsResetButton: View {
+    let action: () -> Void
     @State private var isHovered = false
 
     var body: some View {
-        Button {
-            isOn.toggle()
-            onChange(isOn)
-        } label: {
-            Text(label)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(isOn ? TerminalColors.green : .white.opacity(isHovered ? 0.7 : 0.4))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(isOn ? Color.white.opacity(0.10) : (isHovered ? Color.white.opacity(0.05) : Color.clear))
-                )
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 9))
+                Text("Reset")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundColor(isHovered ? .white.opacity(0.7) : .white.opacity(0.4))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isHovered ? Color.white.opacity(0.05) : Color.clear)
+            )
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
     }
 }
 
