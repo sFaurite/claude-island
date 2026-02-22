@@ -11,6 +11,7 @@ import os.log
 struct HeatmapEntry: Sendable {
     let date: Date
     let messageCount: Int
+    let tokenCount: Int
 }
 
 struct DailyStats: Sendable {
@@ -81,10 +82,16 @@ struct StatsReader: Sendable {
             sum + usage.inputTokens + usage.outputTokens
         }
 
+        // Build token lookup by date
+        var tokensByDate: [String: Int] = [:]
+        for entry in cache.dailyModelTokens {
+            tokensByDate[entry.date] = entry.tokensByModel.values.reduce(0, +)
+        }
+
         // Heatmap entries from dailyActivity
         let heatmap = cache.dailyActivity.compactMap { entry -> HeatmapEntry? in
             guard let d = dateFormatter.date(from: entry.date) else { return nil }
-            return HeatmapEntry(date: d, messageCount: entry.messageCount)
+            return HeatmapEntry(date: d, messageCount: entry.messageCount, tokenCount: tokensByDate[entry.date] ?? 0)
         }
 
         let liveTokens = readTodayLiveTokens()

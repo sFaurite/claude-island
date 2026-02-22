@@ -439,20 +439,17 @@ struct NotchWingsView: View {
                             .frame(width: 12, height: 6)
                     }
                 }
-                ActivityHeatmap(entries: st.heatmapEntries, cellSize: 6, cellGap: 1)
-            }
-
-            HStack(spacing: 8) {
-                Text("Moins").font(.system(size: 7)).foregroundColor(.white.opacity(0.4))
-                ForEach([0.06, 0.35, 0.55, 0.75, 1.0], id: \.self) { opacity in
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(opacity == 0.06 ? .white.opacity(0.06) : TerminalColors.prompt.opacity(opacity))
-                        .frame(width: 8, height: 8)
-                }
-                Text("Plus").font(.system(size: 7)).foregroundColor(.white.opacity(0.4))
+                DetailActivityHeatmap(
+                    entries: st.heatmapEntries,
+                    recordDate: parseDate(st.recordDate),
+                    cellSize: 6,
+                    cellGap: 1
+                )
             }
         }
-        .padding(10)
+        .padding(.vertical, 10)
+        .padding(.leading, 10)
+        .padding(.trailing, 20)
         .background(wingBackground)
         .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
     }
@@ -710,6 +707,13 @@ struct NotchWingsView: View {
         return "\(hours)h"
     }
 
+    private func parseDate(_ dateStr: String) -> Date? {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.timeZone = .current
+        return fmt.date(from: dateStr)
+    }
+
     private func formatTokens(_ count: Int) -> String {
         if count >= 1_000_000_000 {
             return String(format: "%.1fB", Double(count) / 1_000_000_000)
@@ -805,5 +809,177 @@ private struct ActivityHeatmap: View {
         if ratio < 0.50 { return TerminalColors.prompt.opacity(0.55) }
         if ratio < 0.75 { return TerminalColors.prompt.opacity(0.75) }
         return TerminalColors.prompt
+    }
+}
+
+// MARK: - Detail Activity Heatmap (with tooltips)
+
+private struct DetailActivityHeatmap: View {
+    let entries: [HeatmapEntry]
+    let recordDate: Date?
+    var cellSize: CGFloat = 6
+    var cellGap: CGFloat = 1
+
+    @State private var hoveredInfo: String = ""
+    @State private var isRecord: Bool = false
+
+    struct Cell {
+        let date: Date
+        let messageCount: Int
+        let tokenCount: Int
+        let inRange: Bool
+        let isRecord: Bool
+    }
+
+    private static let tooltipDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "E dd/MM"
+        f.locale = Locale(identifier: "fr_FR")
+        return f
+    }()
+
+    var body: some View {
+        let grid = buildGrid()
+        let maxCount = entries.map(\.messageCount).max() ?? 1
+
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .top, spacing: cellGap) {
+                ForEach(0..<grid.count, id: \.self) { col in
+                    VStack(spacing: cellGap) {
+                        ForEach(0..<7, id: \.self) { row in
+                            let cell = grid[col][row]
+                            RoundedRectangle(cornerRadius: 1)
+                                .fill(colorForCell(cell, max: maxCount))
+                                .frame(width: cellSize, height: cellSize)
+                                .overlay(
+                                    cell.isRecord
+                                        ? RoundedRectangle(cornerRadius: 1)
+                                            .stroke(TerminalColors.amber, lineWidth: 1)
+                                        : nil
+                                )
+                                .onHover { hovering in
+                                    if hovering && cell.inRange {
+                                        hoveredInfo = cellText(for: cell)
+                                        isRecord = cell.isRecord
+                                    } else if !hovering && hoveredInfo == cellText(for: cell) {
+                                        hoveredInfo = ""
+                                        isRecord = false
+                                    }
+                                }
+                        }
+                    }
+                }
+            }
+
+            // Legend
+            HStack(spacing: 8) {
+                Text("Moins").font(.system(size: 7)).foregroundColor(.white.opacity(0.4))
+                ForEach([0.06, 0.35, 0.55, 0.75, 1.0], id: \.self) { opacity in
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(opacity == 0.06 ? .white.opacity(0.06) : TerminalColors.prompt.opacity(opacity))
+                        .frame(width: 8, height: 8)
+                }
+                Text("Plus").font(.system(size: 7)).foregroundColor(.white.opacity(0.4))
+            }
+
+            // Hover info (two lines, fixed height to avoid layout shifts)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    if isRecord {
+                        Text("🏆")
+                            .font(.system(size: 8))
+                    }
+                    Text(hoveredDate)
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundColor(isRecord ? TerminalColors.amber : .white.opacity(0.7))
+                }
+                .opacity(hoveredInfo.isEmpty ? 0 : 1)
+                Text(hoveredStats)
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundColor(isRecord ? TerminalColors.amber.opacity(0.7) : .white.opacity(0.5))
+                    .opacity(hoveredInfo.isEmpty ? 0 : 1)
+            }
+            .frame(height: 20, alignment: .leading)
+            .animation(.easeOut(duration: 0.15), value: hoveredInfo)
+        }
+    }
+
+    private var hoveredDate: String {
+        guard !hoveredInfo.isEmpty else { return " " }
+        return String(hoveredInfo.split(separator: "\n").first ?? " ")
+    }
+
+    private var hoveredStats: String {
+        guard !hoveredInfo.isEmpty else { return " " }
+        return String(hoveredInfo.split(separator: "\n").last ?? " ")
+    }
+
+    private func cellText(for cell: Cell) -> String {
+        let dateStr = Self.tooltipDateFormatter.string(from: cell.date)
+        let tokenStr = formatTokensCompact(cell.tokenCount)
+        if cell.isRecord {
+            return "\(dateStr) — Record !\n\(cell.messageCount) msgs · \(tokenStr) tokens"
+        }
+        return "\(dateStr)\n\(cell.messageCount) msgs · \(tokenStr) tokens"
+    }
+
+    private func formatTokensCompact(_ count: Int) -> String {
+        if count >= 1_000_000 { return String(format: "%.1fM", Double(count) / 1_000_000) }
+        if count >= 1_000 { return String(format: "%.1fK", Double(count) / 1_000) }
+        return "\(count)"
+    }
+
+    private func colorForCell(_ cell: Cell, max: Int) -> Color {
+        guard cell.inRange else { return .clear }
+        if cell.messageCount == 0 { return .white.opacity(0.06) }
+        let ratio = Double(cell.messageCount) / Double(max)
+        if ratio < 0.25 { return TerminalColors.prompt.opacity(0.35) }
+        if ratio < 0.50 { return TerminalColors.prompt.opacity(0.55) }
+        if ratio < 0.75 { return TerminalColors.prompt.opacity(0.75) }
+        return TerminalColors.prompt
+    }
+
+    private func buildGrid() -> [[Cell]] {
+        guard let firstEntry = entries.min(by: { $0.date < $1.date }),
+              let lastEntry = entries.max(by: { $0.date < $1.date }) else {
+            return []
+        }
+
+        let calendar = Calendar.current
+        let recordDay = recordDate.map { calendar.startOfDay(for: $0) }
+        var msgLookup: [Date: Int] = [:]
+        var tokLookup: [Date: Int] = [:]
+        for entry in entries {
+            let day = calendar.startOfDay(for: entry.date)
+            msgLookup[day] = entry.messageCount
+            tokLookup[day] = entry.tokenCount
+        }
+
+        let firstDay = calendar.startOfDay(for: firstEntry.date)
+        let lastDay = calendar.startOfDay(for: lastEntry.date)
+        let firstWeekday = (calendar.component(.weekday, from: firstDay) + 5) % 7
+        let startDate = calendar.date(byAdding: .day, value: -firstWeekday, to: firstDay)!
+
+        var grid: [[Cell]] = []
+        var current = startDate
+
+        while current <= lastDay {
+            var column: [Cell] = []
+            for row in 0..<7 {
+                let day = calendar.date(byAdding: .day, value: row, to: current)!
+                let inRange = day >= firstDay && day <= lastDay
+                column.append(Cell(
+                    date: day,
+                    messageCount: inRange ? (msgLookup[day] ?? 0) : 0,
+                    tokenCount: inRange ? (tokLookup[day] ?? 0) : 0,
+                    inRange: inRange,
+                    isRecord: recordDay != nil && day == recordDay
+                ))
+            }
+            grid.append(column)
+            current = calendar.date(byAdding: .day, value: 7, to: current)!
+        }
+
+        return grid
     }
 }
