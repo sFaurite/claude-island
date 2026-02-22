@@ -735,7 +735,7 @@ private struct ActivityHeatmap: View {
 
     var body: some View {
         let grid = buildGrid()
-        let maxCount = entries.map(\.messageCount).max() ?? 1
+        let maxCount = entries.map(\.tokenCount).max() ?? 1
         let step = cellSize + cellGap
 
         Canvas { context, size in
@@ -767,11 +767,11 @@ private struct ActivityHeatmap: View {
 
         let calendar = Calendar.current
 
-        // Build lookup: daysSinceEpoch -> messageCount
+        // Build lookup: day -> tokenCount
         var lookup: [Date: Int] = [:]
         for entry in entries {
             let day = calendar.startOfDay(for: entry.date)
-            lookup[day] = entry.messageCount
+            lookup[day] = entry.tokenCount
         }
 
         // Find the Monday on or before the first entry
@@ -840,7 +840,7 @@ private struct DetailActivityHeatmap: View {
 
     var body: some View {
         let grid = buildGrid()
-        let maxCount = entries.map(\.messageCount).max() ?? 1
+        let maxCount = entries.map(\.tokenCount).max() ?? 1
 
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top, spacing: cellGap) {
@@ -931,8 +931,8 @@ private struct DetailActivityHeatmap: View {
 
     private func colorForCell(_ cell: Cell, max: Int) -> Color {
         guard cell.inRange else { return .clear }
-        if cell.messageCount == 0 { return .white.opacity(0.06) }
-        let ratio = Double(cell.messageCount) / Double(max)
+        if cell.tokenCount == 0 { return .white.opacity(0.06) }
+        let ratio = Double(cell.tokenCount) / Double(max)
         if ratio < 0.25 { return TerminalColors.prompt.opacity(0.35) }
         if ratio < 0.50 { return TerminalColors.prompt.opacity(0.55) }
         if ratio < 0.75 { return TerminalColors.prompt.opacity(0.75) }

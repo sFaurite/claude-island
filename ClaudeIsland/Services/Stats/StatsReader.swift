@@ -82,10 +82,16 @@ struct StatsReader: Sendable {
             sum + usage.inputTokens + usage.outputTokens
         }
 
+        let liveTokens = readTodayLiveTokens()
+
         // Build token lookup by date
         var tokensByDate: [String: Int] = [:]
         for entry in cache.dailyModelTokens {
             tokensByDate[entry.date] = entry.tokensByModel.values.reduce(0, +)
+        }
+        // Use live tokens for today if higher than cache
+        if liveTokens > (tokensByDate[today] ?? 0) {
+            tokensByDate[today] = liveTokens
         }
 
         // Heatmap entries from dailyActivity
@@ -93,8 +99,6 @@ struct StatsReader: Sendable {
             guard let d = dateFormatter.date(from: entry.date) else { return nil }
             return HeatmapEntry(date: d, messageCount: entry.messageCount, tokenCount: tokensByDate[entry.date] ?? 0)
         }
-
-        let liveTokens = readTodayLiveTokens()
 
         // All-time = cache total + any live tokens beyond what cache already knows for today
         let allTimeTokens = allTimeCacheTokens + max(0, liveTokens - dayTokens)
