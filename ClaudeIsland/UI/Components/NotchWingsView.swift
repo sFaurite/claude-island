@@ -947,7 +947,6 @@ private struct DetailActivityHeatmap: View {
     var body: some View {
         let grid = buildGrid()
         let maxCount = entries.map(\.tokenCount).max() ?? 1
-
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .top, spacing: cellGap) {
                 ForEach(0..<grid.count, id: \.self) { col in
@@ -960,7 +959,8 @@ private struct DetailActivityHeatmap: View {
                                 .overlay(
                                     cell.isRecord
                                         ? RoundedRectangle(cornerRadius: 1)
-                                            .stroke(TerminalColors.amber, lineWidth: 1)
+                                            .strokeBorder(TerminalColors.amber, lineWidth: 1.5)
+                                            .allowsHitTesting(false)
                                         : nil
                                 )
                                 .onHover { hovering in
@@ -988,13 +988,15 @@ private struct DetailActivityHeatmap: View {
                 Text("Plus").font(.system(size: 7)).foregroundColor(.white.opacity(0.4))
             }
 
-            // Hover info (two lines, fixed height to avoid layout shifts)
+        }
+        .padding(.bottom, 20)
+        .overlay(alignment: .bottomLeading) {
+            // Hover info en overlay : ne participe pas au calcul de largeur du parent
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
-                    if isRecord {
-                        Text("🏆")
-                            .font(.system(size: 8))
-                    }
+                    Text("🏆")
+                        .font(.system(size: 8))
+                        .opacity(isRecord ? 1 : 0)
                     Text(hoveredDate)
                         .font(.system(size: 8, weight: .bold, design: .monospaced))
                         .foregroundColor(isRecord ? TerminalColors.amber : .white.opacity(0.7))
@@ -1006,7 +1008,7 @@ private struct DetailActivityHeatmap: View {
                     .opacity(hoveredInfo.isEmpty ? 0 : 1)
             }
             .frame(height: 20, alignment: .leading)
-            .animation(.easeOut(duration: 0.15), value: hoveredInfo)
+            .animation(.easeOut(duration: 0.15), value: hoveredInfo.isEmpty)
         }
     }
 
@@ -1023,9 +1025,6 @@ private struct DetailActivityHeatmap: View {
     private func cellText(for cell: Cell) -> String {
         let dateStr = Self.tooltipDateFormatter.string(from: cell.date)
         let tokenStr = formatTokensCompact(cell.tokenCount)
-        if cell.isRecord {
-            return "\(dateStr) — Record !\n\(cell.messageCount) msgs · \(tokenStr) tokens"
-        }
         return "\(dateStr)\n\(cell.messageCount) msgs · \(tokenStr) tokens"
     }
 

@@ -6,10 +6,10 @@
 #   - Live : toutes les heures (base scellée + données du jour)
 #   - Force (recalcul complet de la base) : une fois par semaine (7+ jours sans force)
 #
-# Conçu pour tourner via cron toutes les heures. Le script Node gère
+# Conçu pour tourner via launchd toutes les heures. Le script Node gère
 # lui-même la mise à jour incrémentale de la base et le calcul live.
 #
-# Cron : 0 * * * * /Users/faurite/Documents/Outils/ClaudeIsland/claude-island/scripts/claude-stats-scheduler.sh
+# LaunchAgent : ~/Library/LaunchAgents/com.claude.stats-scheduler.plist
 #
 # Fichier d'état : ~/.claude/stats-scheduler-state.json
 
@@ -21,6 +21,12 @@ STATE_FILE="$HOME/.claude/stats-scheduler-state.json"
 LOGFILE="/tmp/claude-stats-scheduler.log"
 LOCKFILE="/tmp/claude-stats-scheduler.lock"
 NODE="$(command -v node 2>/dev/null)"
+if [ -z "$NODE" ]; then
+    # Fallback : charger nvm (environnement launchd / cron sans PATH complet)
+    export NVM_DIR="$HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+    NODE="$(command -v node 2>/dev/null)"
+fi
 
 # ── Logging ─────────────────────────────────────────────────────────
 
