@@ -155,39 +155,75 @@ struct StatsReader: Sendable {
 
     // MARK: - Live Today Tokens (from JSONL files)
 
-    /// Scans ~/.claude/projects/*/*.jsonl files modified today to compute live token usage
+    /// Scans JSONL files modified today to compute live token usage.
+    /// Sources: CLI sessions, subagents, and Desktop local-agent-mode sessions.
     private static func readTodayLiveTokens() -> Int {
         let fm = FileManager.default
-        let projectsDir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
-
-        guard let projectDirs = try? fm.contentsOfDirectory(at: projectsDir, includingPropertiesForKeys: nil) else {
-            return 0
-        }
-
         let calendar = Calendar.current
         let todayStart = calendar.startOfDay(for: Date())
         let todayPrefix = dateFormatter.string(from: Date()) // "yyyy-MM-dd"
 
         var totalTokens = 0
 
-        for projDir in projectDirs {
-            guard let files = try? fm.contentsOfDirectory(at: projDir, includingPropertiesForKeys: [.contentModificationDateKey]) else {
-                continue
-            }
-
-            for file in files {
-                guard file.pathExtension == "jsonl" else { continue }
-
-                // Only read files modified today
-                guard let attrs = try? file.resourceValues(forKeys: [.contentModificationDateKey]),
-                      let modDate = attrs.contentModificationDate,
-                      modDate >= todayStart else { continue }
-
-                totalTokens += scanJsonlForTodayTokens(file: file, todayPrefix: todayPrefix)
+        // ── CLI sessions: ~/.claude/projects/ ──
+        let projectsDir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
+        if let projectDirs = try? fm.contentsOfDirectory(at: projectsDir, includingPropertiesForKeys: nil) {
+            for projDir in projectDirs {
+                guard let items = try? fm.contentsOfDirectory(at: projDir, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey]) else {
+                    continue
+                }
+                for item in items {
+                    if item.pathExtension == "jsonl" {
+                        guard let attrs = try? item.resourceValues(forKeys: [.contentModificationDateKey]),
+                              let modDate = attrs.contentModificationDate,
+                              modDate >= todayStart else { continue }
+                        totalTokens += scanJsonlForTodayTokens(file: item, todayPrefix: todayPrefix)
+                        continue
+                    }
+                    // Session subdirectories: scan subagents/agent-*.jsonl
+                    let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+                    guard isDir else { continue }
+                    let subagentsDir = item.appendingPathComponent("subagents")
+                    guard let subFiles = try? fm.contentsOfDirectory(at: subagentsDir, includingPropertiesForKeys: [.contentModificationDateKey]) else { continue }
+                    for subFile in subFiles {
+                        guard subFile.pathExtension == "jsonl",
+                              subFile.lastPathComponent.hasPrefix("agent-") else { continue }
+                        guard let attrs = try? subFile.resourceValues(forKeys: [.contentModificationDateKey]),
+                              let modDate = attrs.contentModificationDate,
+                              modDate >= todayStart else { continue }
+                        totalTokens += scanJsonlForTodayTokens(file: subFile, todayPrefix: todayPrefix)
+                    }
+                }
             }
         }
 
+        // ── Desktop local-agent-mode sessions ──
+        let desktopAgentDir = fm.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Claude/local-agent-mode-sessions")
+        totalTokens += scanDirectoryRecursively(dir: desktopAgentDir, todayStart: todayStart, todayPrefix: todayPrefix)
+
         return totalTokens
+    }
+
+    /// Recursively scan a directory tree for JSONL files modified today
+    private static func scanDirectoryRecursively(dir: URL, todayStart: Date, todayPrefix: String) -> Int {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey]) else {
+            return 0
+        }
+        var tokens = 0
+        for item in items {
+            let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            if isDir {
+                tokens += scanDirectoryRecursively(dir: item, todayStart: todayStart, todayPrefix: todayPrefix)
+            } else if item.pathExtension == "jsonl" {
+                guard let attrs = try? item.resourceValues(forKeys: [.contentModificationDateKey]),
+                      let modDate = attrs.contentModificationDate,
+                      modDate >= todayStart else { continue }
+                tokens += scanJsonlForTodayTokens(file: item, todayPrefix: todayPrefix)
+            }
+        }
+        return tokens
     }
 
     private static func scanJsonlForTodayTokens(file: URL, todayPrefix: String) -> Int {

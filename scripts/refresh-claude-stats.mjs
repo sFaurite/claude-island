@@ -16,6 +16,7 @@ import { randomBytes } from 'crypto';
 
 const CLAUDE_DIR = join(homedir(), '.claude');
 const PROJECTS_DIR = join(CLAUDE_DIR, 'projects');
+const DESKTOP_AGENT_DIR = join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions');
 const CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json');
 const BASE_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache-base.json');
 const CACHE_VERSION = 2;
@@ -43,9 +44,11 @@ function nextDay(dateStr) {
 
 function findSessionFiles() {
   const files = [];
+
+  // ── CLI sessions: ~/.claude/projects/*/*.jsonl + subagents ──
   let projEntries;
   try { projEntries = readdirSync(PROJECTS_DIR, { withFileTypes: true }); }
-  catch { return files; }
+  catch { projEntries = []; }
 
   for (const proj of projEntries) {
     if (!proj.isDirectory()) continue;
@@ -71,7 +74,26 @@ function findSessionFiles() {
       }
     }
   }
+
+  // ── Desktop local-agent-mode sessions ──
+  // ~/Library/Application Support/Claude/local-agent-mode-sessions/…/.claude/projects/…/*.jsonl
+  findDesktopAgentFiles(DESKTOP_AGENT_DIR, files);
+
   return files;
+}
+
+function findDesktopAgentFiles(dir, files) {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); }
+  catch { return; }
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isFile() && entry.name.endsWith('.jsonl')) {
+      files.push(full);
+    } else if (entry.isDirectory()) {
+      findDesktopAgentFiles(full, files);
+    }
+  }
 }
 
 // ── Parsing JSONL ──────────────────────────────────────────────────
@@ -133,6 +155,7 @@ function processSessionFiles(files, { fromDate, toDate } = {}) {
     const last = main[main.length - 1];
     const firstDate = new Date(first.timestamp);
     const lastDate = new Date(last.timestamp);
+    if (isNaN(firstDate.getTime()) || isNaN(lastDate.getTime())) continue;
     const dateStr = toDateStr(firstDate);
 
     // Filtres de dates
