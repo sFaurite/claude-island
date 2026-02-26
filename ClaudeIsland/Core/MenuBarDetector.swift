@@ -18,6 +18,9 @@ private func CGSGetActiveSpace(_ connection: Int32) -> Int
 @_silgen_name("CGSSpaceGetType")
 private func CGSSpaceGetType(_ connection: Int32, _ space: Int) -> Int
 
+@_silgen_name("CGSManagedDisplayGetCurrentSpace")
+private func CGSManagedDisplayGetCurrentSpace(_ connection: Int32, _ displayUUID: CFString) -> Int
+
 @MainActor
 final class MenuBarDetector: ObservableObject {
     @Published var isMenuBarHidden: Bool = false
@@ -63,12 +66,32 @@ final class MenuBarDetector: ObservableObject {
         // Use private CGS API to detect fullscreen space
         // Space type: 0 = desktop/user, 4 = fullscreen
         let conn = CGSMainConnectionID()
-        let activeSpace = CGSGetActiveSpace(conn)
-        let spaceType = CGSSpaceGetType(conn, activeSpace)
 
+        // Query the built-in display's space specifically (where the notch lives)
+        // instead of the globally active space, so wings persist when the user
+        // clicks on a secondary screen while fullscreen is active on the main one.
+        let space: Int
+        if let builtIn = Self.builtInScreen,
+           let displayID = builtIn.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+           let uuid = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeUnretainedValue() {
+            let uuidString = CFUUIDCreateString(nil, uuid) as CFString
+            space = CGSManagedDisplayGetCurrentSpace(conn, uuidString)
+        } else {
+            space = CGSGetActiveSpace(conn)
+        }
+
+        let spaceType = CGSSpaceGetType(conn, space)
         let hidden = spaceType == 4
         if hidden != isMenuBarHidden {
             isMenuBarHidden = hidden
+        }
+    }
+
+    /// The built-in screen (MacBook display with the notch)
+    private static var builtInScreen: NSScreen? {
+        NSScreen.screens.first { screen in
+            guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return false }
+            return CGDisplayIsBuiltin(id) != 0
         }
     }
 }
