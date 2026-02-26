@@ -22,6 +22,20 @@ final class NotchWingsController: ObservableObject {
     private var refreshTimer: Timer?
     private var tickTimer: Timer?
 
+    init() {
+        // Rate limits : chargement instantané depuis le cache disque (~1ms)
+        self.rateLimits = RateLimitService.loadFromDisk()
+
+        // Stats : chargement depuis le fichier cache (async pour ne pas bloquer le main thread)
+        Task { @MainActor [weak self] in
+            let loaded = await Task.detached { StatsReader.read() }.value
+            // Ne pas écraser si startAutoRefresh() a déjà mis à jour entre-temps
+            if self?.stats == nil {
+                self?.stats = loaded
+            }
+        }
+    }
+
     func refresh() {
         Task {
             async let rl = fetchRateLimits()
@@ -143,7 +157,16 @@ struct NotchWingsView: View {
     private var boldFont: Font { Font.system(size: fontSize - 1, weight: .bold, design: .monospaced) }
     private let wingPadding: CGFloat = 8
     private let wingCornerRadius: CGFloat = 6
-    private let detailPanelHeight: CGFloat = 108
+    private var detailPanelHeight: CGFloat {
+        guard let section = expandedSection else { return 108 }
+        switch section {
+        case .daily:
+            guard let st = stats, !st.last7Days.isEmpty else { return 108 }
+            return CGFloat(20 + 18 + st.last7Days.count * 18)
+        default:
+            return 108
+        }
+    }
 
     var body: some View {
         let _ = tick // consumed to trigger re-render for staleness
@@ -596,40 +619,92 @@ struct NotchWingsView: View {
     }
 
     private func dailyDetail(_ st: DailyStats) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let lastDate = st.lastDayDate {
-                Text(formatShortDate(lastDate))
+        let days = st.last7Days
+        let maxTokens = days.map(\.tokens).max() ?? 0
+        let minTokens = days.map(\.tokens).min() ?? 0
+        let hasRecord = days.contains { $0.date == st.recordDate }
+
+        return VStack(alignment: .leading, spacing: 0) {
+            if !days.isEmpty {
+                Text("7 derniers jours")
                     .font(.system(size: fontSize, weight: .bold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.7))
+                    .padding(.bottom, 4)
 
-                HStack(spacing: 16) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Messages").font(smallFont).foregroundColor(.white.opacity(0.4))
-                        Text("\(st.lastDayMessages)")
-                            .font(boldFont).foregroundColor(.white.opacity(0.7))
+                // Header row
+                HStack(spacing: 0) {
+                    Text("Date")
+                        .frame(width: 68, alignment: .leading)
+                    Text("Msgs")
+                        .frame(width: 54, alignment: .trailing)
+                    Text("Sess")
+                        .frame(width: 40, alignment: .trailing)
+                    Text("Tools")
+                        .frame(width: 54, alignment: .trailing)
+                    Text("Tokens")
+                        .frame(width: 60, alignment: .trailing)
+                }
+                .font(smallFont)
+                .foregroundColor(.white.opacity(0.35))
+
+                // Data rows
+                ForEach(Array(days.enumerated()), id: \.offset) { _, entry in
+                    let isWeekendRow: Bool = {
+                        let df = DateFormatter()
+                        df.dateFormat = "yyyy-MM-dd"
+                        guard let d = df.date(from: entry.date) else { return false }
+                        let wd = Calendar.current.component(.weekday, from: d)
+                        return wd == 1 || wd == 7
+                    }()
+                    let isRecord = entry.date == st.recordDate
+                    let rowColor: Color = {
+                        if isRecord { return TerminalColors.amber.opacity(isWeekendRow ? 0.7 : 0.9) }
+                        if maxTokens != minTokens {
+                            if entry.tokens == maxTokens { return TerminalColors.green.opacity(isWeekendRow ? 0.7 : 0.9) }
+                            if entry.tokens == minTokens { return TerminalColors.blue.opacity(isWeekendRow ? 0.4 : 0.5) }
+                        }
+                        return .white.opacity(isWeekendRow ? 0.45 : 0.7)
+                    }()
+                    HStack(spacing: 0) {
+                        Text(formatDayDate(entry.date))
+                            .frame(width: 68, alignment: .leading)
+                            .overlay(alignment: .leading) {
+                                if isRecord {
+                                    Text("🏆")
+                                        .font(.system(size: fontSize - 2))
+                                        .offset(x: -18)
+                                }
+                            }
+                        Text("\(entry.messages)")
+                            .frame(width: 54, alignment: .trailing)
+                        Text("\(entry.sessions)")
+                            .frame(width: 40, alignment: .trailing)
+                        Text("\(entry.toolCalls)")
+                            .frame(width: 54, alignment: .trailing)
+                        Text(formatTokens(entry.tokens))
+                            .frame(width: 60, alignment: .trailing)
                     }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Sessions").font(smallFont).foregroundColor(.white.opacity(0.4))
-                        Text("\(st.lastDaySessions)")
-                            .font(boldFont).foregroundColor(.white.opacity(0.7))
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Tool calls").font(smallFont).foregroundColor(.white.opacity(0.4))
-                        Text("\(st.lastDayToolCalls)")
-                            .font(boldFont).foregroundColor(.white.opacity(0.7))
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Tokens").font(smallFont).foregroundColor(.white.opacity(0.4))
-                        Text(formatTokens(st.lastDayTokens))
-                            .font(boldFont).foregroundColor(.white.opacity(0.7))
-                    }
+                    .font(smallFont)
+                    .foregroundColor(rowColor)
+                    .padding(.vertical, 1)
+                    .padding(.horizontal, -2)
+                    .background(
+                        Group {
+                            if isWeekendRow {
+                                DiagonalHatching(spacing: 5, lineWidth: 1, color: .white.opacity(0.18))
+                                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                            }
+                        }
+                    )
                 }
             } else {
                 Text("Pas de données")
                     .font(smallFont).foregroundColor(.white.opacity(0.4))
             }
         }
-        .padding(10)
+        .padding(.vertical, 10)
+        .padding(.leading, hasRecord ? 24 : 10)
+        .padding(.trailing, 10)
         .background(wingBackground)
         .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
     }
@@ -793,6 +868,16 @@ struct NotchWingsView: View {
         return "\(parts[2])/\(parts[1])"
     }
 
+    private func formatDayDate(_ dateStr: String) -> String {
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd"
+        df.locale = Locale(identifier: "fr_FR")
+        guard let date = df.date(from: dateStr) else { return formatShortDate(dateStr) }
+        let weekday = Calendar.current.component(.weekday, from: date)
+        let names = ["Di", "Lu", "Ma", "Me", "Je", "Ve", "Sa"]
+        return "\(names[weekday - 1]) \(formatShortDate(dateStr))"
+    }
+
     private func formatDetailedResetTime(_ date: Date) -> String {
         let interval = max(0, date.timeIntervalSinceNow)
         let totalMinutes = Int(interval) / 60
@@ -911,10 +996,30 @@ private struct ActivityHeatmap: View {
         if count < 0 { return .clear } // Outside range
         if count == 0 { return .white.opacity(0.06) }
         let ratio = Double(count) / Double(max)
-        if ratio < 0.25 { return TerminalColors.prompt.opacity(0.35) }
-        if ratio < 0.50 { return TerminalColors.prompt.opacity(0.55) }
-        if ratio < 0.75 { return TerminalColors.prompt.opacity(0.75) }
-        return TerminalColors.prompt
+        let step = Int(ratio * 255) // 0...255
+        let opacity = 0.06 + Double(step) / 255.0 * 0.94
+        return TerminalColors.prompt.opacity(opacity)
+    }
+}
+
+// MARK: - Diagonal Hatching
+
+private struct DiagonalHatching: View {
+    let spacing: CGFloat
+    let lineWidth: CGFloat
+    let color: Color
+
+    var body: some View {
+        Canvas { context, size in
+            var x: CGFloat = -size.height
+            while x < size.width + size.height {
+                var path = Path()
+                path.move(to: CGPoint(x: x, y: size.height))
+                path.addLine(to: CGPoint(x: x + size.height, y: 0))
+                context.stroke(path, with: .color(color), lineWidth: lineWidth)
+                x += spacing
+            }
+        }
     }
 }
 
@@ -980,9 +1085,10 @@ private struct DetailActivityHeatmap: View {
             // Legend
             HStack(spacing: 8) {
                 Text("Moins").font(.system(size: 7)).foregroundColor(.white.opacity(0.4))
-                ForEach([0.06, 0.35, 0.55, 0.75, 1.0], id: \.self) { opacity in
+                ForEach(0..<8, id: \.self) { i in
+                    let opacity = 0.06 + Double(i) / 7.0 * 0.94
                     RoundedRectangle(cornerRadius: 1)
-                        .fill(opacity == 0.06 ? .white.opacity(0.06) : TerminalColors.prompt.opacity(opacity))
+                        .fill(i == 0 ? .white.opacity(0.06) : TerminalColors.prompt.opacity(opacity))
                         .frame(width: 8, height: 8)
                 }
                 Text("Plus").font(.system(size: 7)).foregroundColor(.white.opacity(0.4))
@@ -1038,10 +1144,9 @@ private struct DetailActivityHeatmap: View {
         guard cell.inRange else { return .clear }
         if cell.tokenCount == 0 { return .white.opacity(0.06) }
         let ratio = Double(cell.tokenCount) / Double(max)
-        if ratio < 0.25 { return TerminalColors.prompt.opacity(0.35) }
-        if ratio < 0.50 { return TerminalColors.prompt.opacity(0.55) }
-        if ratio < 0.75 { return TerminalColors.prompt.opacity(0.75) }
-        return TerminalColors.prompt
+        let step = Int(ratio * 255) // 0...255
+        let opacity = 0.06 + Double(step) / 255.0 * 0.94
+        return TerminalColors.prompt.opacity(opacity)
     }
 
     private func buildGrid() -> [[Cell]] {

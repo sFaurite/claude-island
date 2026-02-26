@@ -14,6 +14,14 @@ struct HeatmapEntry: Sendable {
     let tokenCount: Int
 }
 
+struct DayHistoryEntry: Sendable {
+    let date: String      // "yyyy-MM-dd"
+    let messages: Int
+    let sessions: Int
+    let toolCalls: Int
+    let tokens: Int
+}
+
 struct DailyStats: Sendable {
     let messageCount: Int
     let sessionCount: Int
@@ -34,6 +42,7 @@ struct DailyStats: Sendable {
     let lastDaySessions: Int
     let lastDayToolCalls: Int
     let lastDayTokens: Int
+    let last7Days: [DayHistoryEntry]
 }
 
 struct StatsReader: Sendable {
@@ -131,6 +140,22 @@ struct StatsReader: Sendable {
             .last
         let lastDayTokenCount = lastDay.flatMap { tokensByDate[$0.date] } ?? 0
 
+        // Last 7 non-empty days excluding today (most recent first)
+        let recentDays = cache.dailyActivity
+            .filter { $0.date != today && $0.messageCount > 0 }
+            .suffix(7)
+            .reversed()
+            .map { entry in
+                DayHistoryEntry(
+                    date: entry.date,
+                    messages: entry.messageCount,
+                    sessions: entry.sessionCount,
+                    toolCalls: entry.toolCallCount,
+                    tokens: tokensByDate[entry.date] ?? 0
+                )
+            }
+        let last7Days = Array(recentDays)
+
         return DailyStats(
             messageCount: activity?.messageCount ?? 0,
             sessionCount: activity?.sessionCount ?? 0,
@@ -149,7 +174,8 @@ struct StatsReader: Sendable {
             lastDayMessages: lastDay?.messageCount ?? 0,
             lastDaySessions: lastDay?.sessionCount ?? 0,
             lastDayToolCalls: lastDay?.toolCallCount ?? 0,
-            lastDayTokens: lastDayTokenCount
+            lastDayTokens: lastDayTokenCount,
+            last7Days: last7Days
         )
     }
 
