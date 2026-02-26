@@ -174,7 +174,7 @@ struct NotchView: View {
                         set: { viewModel.wingsExpandedHeight = $0 }
                     )
                 )
-                .transition(.opacity.animation(.easeInOut(duration: 0.3)))
+                .transition(.opacity.animation(.easeOut(duration: 0.12)))
             }
 
             // Outer container does NOT receive hits - only the notch content does

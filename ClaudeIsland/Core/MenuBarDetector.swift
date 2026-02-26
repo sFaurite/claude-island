@@ -54,7 +54,7 @@ final class MenuBarDetector: ObservableObject {
     }
 
     private func scheduleCheck() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             self?.check()
         }
     }

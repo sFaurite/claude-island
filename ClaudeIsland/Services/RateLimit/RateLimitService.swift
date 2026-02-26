@@ -8,7 +8,7 @@
 import Foundation
 import os.log
 
-struct RateLimitData: Sendable {
+struct RateLimitData: Sendable, Codable {
     let fiveHourUtilization: Double    // 0.0–1.0
     let fiveHourReset: Date
     let sevenDayUtilization: Double    // 0.0–1.0
@@ -21,11 +21,37 @@ actor RateLimitService {
     static let shared = RateLimitService()
     private static let logger = Logger(subsystem: "com.claudeisland", category: "RateLimitService")
 
+    /// Cache token OAuth en mémoire (évite la lecture keychain à chaque refresh)
+    private var cachedToken: String?
+
+    /// Chemin du cache disque
+    static let cacheURL: URL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".claude/rate-limit-cache.json")
+
     private init() {}
 
     func fetch() async throws -> RateLimitData {
-        let token = try await readOAuthToken()
-        return try await fetchRateLimits(token: token)
+        let token: String
+        if let cached = cachedToken {
+            token = cached
+        } else {
+            token = try await readOAuthToken()
+            cachedToken = token
+        }
+
+        do {
+            let data = try await fetchRateLimits(token: token)
+            saveToDisk(data)
+            return data
+        } catch RateLimitError.unauthorized {
+            // Token expiré → relire le keychain, retry une fois
+            cachedToken = nil
+            let freshToken = try await readOAuthToken()
+            cachedToken = freshToken
+            let data = try await fetchRateLimits(token: freshToken)
+            saveToDisk(data)
+            return data
+        }
     }
 
     // MARK: - OAuth Token
@@ -127,6 +153,26 @@ actor RateLimitService {
     private func parseTimestamp(_ value: String?) -> Date {
         guard let str = value, let ts = TimeInterval(str) else { return Date() }
         return Date(timeIntervalSince1970: ts)
+    }
+
+    // MARK: - Disk Cache
+
+    private func saveToDisk(_ data: RateLimitData) {
+        do {
+            let encoded = try JSONEncoder().encode(data)
+            try encoded.write(to: Self.cacheURL, options: .atomic)
+        } catch {
+            Self.logger.warning("Failed to save rate limit cache: \(error.localizedDescription)")
+        }
+    }
+
+    /// Chargement du cache — nonisolated static pour appel synchrone depuis init()
+    nonisolated static func loadFromDisk() -> RateLimitData? {
+        guard let data = try? Data(contentsOf: cacheURL),
+              let cached = try? JSONDecoder().decode(RateLimitData.self, from: data) else {
+            return nil
+        }
+        return cached
     }
 }
 
