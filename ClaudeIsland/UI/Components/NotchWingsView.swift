@@ -517,31 +517,30 @@ struct NotchWingsView: View {
     }
 
     private func heatmapDetail(_ st: DailyStats) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(spacing: 8) {
             Text("Activité")
                 .font(.system(size: fontSize, weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.7))
 
             HStack(alignment: .top, spacing: 4) {
-                VStack(spacing: 1) {
+                VStack(spacing: 1.5) {
                     ForEach(Array(["L", "Ma", "Me", "J", "V", "S", "D"].enumerated()), id: \.offset) { _, day in
                         Text(day)
-                            .font(.system(size: 7, weight: .medium, design: .monospaced))
+                            .font(.system(size: 8, weight: .medium, design: .monospaced))
                             .foregroundColor(.white.opacity(0.4))
-                            .frame(width: 12, height: 6)
+                            .frame(width: 14, height: 8)
                     }
                 }
                 DetailActivityHeatmap(
                     entries: st.heatmapEntries,
                     recordDate: parseDate(st.recordDate),
-                    cellSize: 6,
-                    cellGap: 1
+                    cellSize: 8,
+                    cellGap: 1.5
                 )
             }
         }
         .padding(.vertical, 10)
-        .padding(.leading, 10)
-        .padding(.trailing, 20)
+        .padding(.horizontal, 14)
         .background(wingBackground)
         .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
     }
@@ -1052,10 +1051,10 @@ private struct DetailActivityHeatmap: View {
     var body: some View {
         let grid = buildGrid()
         let maxCount = entries.map(\.tokenCount).max() ?? 1
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(alignment: .top, spacing: cellGap) {
+        VStack(spacing: 5) {
+            HStack(alignment: .top, spacing: 0) {
                 ForEach(0..<grid.count, id: \.self) { col in
-                    VStack(spacing: cellGap) {
+                    VStack(spacing: 0) {
                         ForEach(0..<7, id: \.self) { row in
                             let cell = grid[col][row]
                             RoundedRectangle(cornerRadius: 1)
@@ -1068,6 +1067,8 @@ private struct DetailActivityHeatmap: View {
                                             .allowsHitTesting(false)
                                         : nil
                                 )
+                                .padding(cellGap / 2)
+                                .contentShape(Rectangle())
                                 .onHover { hovering in
                                     if hovering && cell.inRange {
                                         hoveredInfo = cellText(for: cell)
@@ -1082,38 +1083,27 @@ private struct DetailActivityHeatmap: View {
                 }
             }
 
-            // Legend
-            HStack(spacing: 8) {
-                Text("Moins").font(.system(size: 7)).foregroundColor(.white.opacity(0.4))
-                ForEach(0..<8, id: \.self) { i in
-                    let opacity = 0.06 + Double(i) / 7.0 * 0.94
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(i == 0 ? .white.opacity(0.06) : TerminalColors.prompt.opacity(opacity))
-                        .frame(width: 8, height: 8)
-                }
-                Text("Plus").font(.system(size: 7)).foregroundColor(.white.opacity(0.4))
-            }
-
-        }
-        .padding(.bottom, 20)
-        .overlay(alignment: .bottomLeading) {
-            // Hover info en overlay : ne participe pas au calcul de largeur du parent
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text("🏆")
-                        .font(.system(size: 8))
+                        .font(.system(size: 10))
                         .opacity(isRecord ? 1 : 0)
                     Text(hoveredDate)
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundColor(isRecord ? TerminalColors.amber : .white.opacity(0.7))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 .opacity(hoveredInfo.isEmpty ? 0 : 1)
                 Text(hoveredStats)
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(isRecord ? TerminalColors.amber.opacity(0.7) : .white.opacity(0.5))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .opacity(hoveredInfo.isEmpty ? 0 : 1)
             }
-            .frame(height: 20, alignment: .leading)
+            .frame(height: 28)
+            .frame(minWidth: 180)
             .animation(.easeOut(duration: 0.15), value: hoveredInfo.isEmpty)
         }
     }
