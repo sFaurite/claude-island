@@ -81,10 +81,51 @@ final class MenuBarDetector: ObservableObject {
         }
 
         let spaceType = CGSSpaceGetType(conn, space)
-        let hidden = spaceType == 4
+
+        // Native fullscreen OR non-native terminal fullscreen
+        let hidden = spaceType == 4 || isTerminalFullscreenOnBuiltIn()
         if hidden != isMenuBarHidden {
             isMenuBarHidden = hidden
         }
+    }
+
+    /// Detect a terminal window covering the entire built-in screen
+    /// (non-native fullscreen like Ghostty's macos-non-native-fullscreen)
+    private func isTerminalFullscreenOnBuiltIn() -> Bool {
+        guard let screen = Self.builtInScreen else { return false }
+
+        // CGWindowListCopyWindowInfo uses Quartz coordinates (origin top-left, Y down)
+        // NSScreen.frame uses Cocoa coordinates (origin bottom-left, Y up)
+        // Convert screen frame to Quartz coordinates for comparison
+        let cocoaFrame = screen.frame
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? cocoaFrame.height
+        let screenFrame = CGRect(
+            x: cocoaFrame.origin.x,
+            y: primaryHeight - cocoaFrame.origin.y - cocoaFrame.height,
+            width: cocoaFrame.width,
+            height: cocoaFrame.height
+        )
+        let screenArea = screenFrame.width * screenFrame.height
+
+        guard let windowList = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else { return false }
+
+        for window in windowList {
+            guard let ownerName = window[kCGWindowOwnerName as String] as? String,
+                  let layer = window[kCGWindowLayer as String] as? Int,
+                  layer == 0,
+                  TerminalAppRegistry.isTerminal(ownerName),
+                  let boundsDict = window[kCGWindowBounds as String] as? NSDictionary else { continue }
+
+            var winRect = CGRect.zero
+            guard CGRectMakeWithDictionaryRepresentation(boundsDict, &winRect) else { continue }
+
+            let intersection = winRect.intersection(screenFrame)
+            let coverage = (intersection.width * intersection.height) / screenArea
+            if coverage >= 0.98 { return true }
+        }
+        return false
     }
 
     /// The built-in screen (MacBook display with the notch)
