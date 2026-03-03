@@ -926,6 +926,7 @@ private struct ActivityHeatmap: View {
     var body: some View {
         let grid = buildGrid()
         let maxCount = entries.map(\.tokenCount).max() ?? 1
+        let p75 = percentile75()
         let step = cellSize + cellGap
 
         Canvas { context, size in
@@ -937,7 +938,7 @@ private struct ActivityHeatmap: View {
                     let count = grid[col][row]
                     context.fill(
                         RoundedRectangle(cornerRadius: cellSize > 4 ? 1 : 0.5).path(in: rect),
-                        with: .color(colorForCount(count, max: maxCount))
+                        with: .color(colorForCount(count, max: maxCount, p75: p75))
                     )
                 }
             }
@@ -991,13 +992,34 @@ private struct ActivityHeatmap: View {
         return grid
     }
 
-    private func colorForCount(_ count: Int, max: Int) -> Color {
-        if count < 0 { return .clear } // Outside range
+    private func percentile75() -> Int {
+        let nonZero = entries.map(\.tokenCount).filter { $0 > 0 }.sorted()
+        guard !nonZero.isEmpty else { return 1 }
+        let index = Int(Double(nonZero.count - 1) * 0.75)
+        return max(nonZero[index], 1)
+    }
+
+    private func colorForCount(_ count: Int, max: Int, p75: Int) -> Color {
+        if count < 0 { return .clear }
         if count == 0 { return .white.opacity(0.06) }
-        let ratio = Double(count) / Double(max)
-        let step = Int(ratio * 255) // 0...255
-        let opacity = 0.06 + Double(step) / 255.0 * 0.94
-        return TerminalColors.prompt.opacity(opacity)
+
+        let threshold = Double(p75)
+
+        if Double(count) <= threshold {
+            // Phase 1: Linear orange gradient
+            let ratio = Double(count) / threshold
+            let opacity = 0.06 + ratio * 0.94
+            return TerminalColors.prompt.opacity(opacity)
+        } else {
+            // Phase 2: Heated metal — orange → amber → yellow → white
+            let range = Double(max) - threshold
+            guard range > 0 else { return .white }
+            let normalized = min((Double(count) - threshold) / range, 1.0)
+            let r = 0.85 + pow(normalized, 0.2) * 0.15
+            let g = 0.47 + pow(normalized, 0.45) * 0.53
+            let b = 0.34 + pow(normalized, 0.9) * 0.66
+            return Color(red: min(r, 1), green: min(g, 1), blue: min(b, 1))
+        }
     }
 }
 
@@ -1051,6 +1073,7 @@ private struct DetailActivityHeatmap: View {
     var body: some View {
         let grid = buildGrid()
         let maxCount = entries.map(\.tokenCount).max() ?? 1
+        let p75 = percentile75()
         VStack(spacing: 5) {
             HStack(alignment: .top, spacing: 0) {
                 ForEach(0..<grid.count, id: \.self) { col in
@@ -1058,7 +1081,7 @@ private struct DetailActivityHeatmap: View {
                         ForEach(0..<7, id: \.self) { row in
                             let cell = grid[col][row]
                             RoundedRectangle(cornerRadius: 1)
-                                .fill(colorForCell(cell, max: maxCount))
+                                .fill(colorForCell(cell, max: maxCount, p75: p75))
                                 .frame(width: cellSize, height: cellSize)
                                 .overlay(
                                     cell.isRecord
@@ -1130,13 +1153,34 @@ private struct DetailActivityHeatmap: View {
         return "\(count)"
     }
 
-    private func colorForCell(_ cell: Cell, max: Int) -> Color {
+    private func percentile75() -> Int {
+        let nonZero = entries.map(\.tokenCount).filter { $0 > 0 }.sorted()
+        guard !nonZero.isEmpty else { return 1 }
+        let index = Int(Double(nonZero.count - 1) * 0.75)
+        return max(nonZero[index], 1)
+    }
+
+    private func colorForCell(_ cell: Cell, max: Int, p75: Int) -> Color {
         guard cell.inRange else { return .clear }
         if cell.tokenCount == 0 { return .white.opacity(0.06) }
-        let ratio = Double(cell.tokenCount) / Double(max)
-        let step = Int(ratio * 255) // 0...255
-        let opacity = 0.06 + Double(step) / 255.0 * 0.94
-        return TerminalColors.prompt.opacity(opacity)
+
+        let threshold = Double(p75)
+
+        if Double(cell.tokenCount) <= threshold {
+            // Phase 1: Linear orange gradient
+            let ratio = Double(cell.tokenCount) / threshold
+            let opacity = 0.06 + ratio * 0.94
+            return TerminalColors.prompt.opacity(opacity)
+        } else {
+            // Phase 2: Heated metal — orange → amber → yellow → white
+            let range = Double(max) - threshold
+            guard range > 0 else { return .white }
+            let normalized = min((Double(cell.tokenCount) - threshold) / range, 1.0)
+            let r = 0.85 + pow(normalized, 0.2) * 0.15
+            let g = 0.47 + pow(normalized, 0.45) * 0.53
+            let b = 0.34 + pow(normalized, 0.9) * 0.66
+            return Color(red: min(r, 1), green: min(g, 1), blue: min(b, 1))
+        }
     }
 
     private func buildGrid() -> [[Cell]] {
