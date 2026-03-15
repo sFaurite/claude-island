@@ -38,9 +38,19 @@ echo "Installation dans /Applications..."
 rm -rf "$APP_DEST"
 cp -R "$APP_SRC" "$APP_DEST"
 
-# Re-signer (Sparkle + ad-hoc)
+# Extraire les entitlements du binaire buildé et ajouter disable-library-validation.
+# Nécessaire car le signing ad-hoc (sans Team ID) + hardened runtime active la
+# library validation, ce qui bloque le chargement de Sparkle.framework.
+ENTITLEMENTS_TEMP=$(mktemp)
+codesign -d --entitlements :- "$APP_SRC" > "$ENTITLEMENTS_TEMP" 2>/dev/null
+/usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$ENTITLEMENTS_TEMP"
+
+# Re-signer ad-hoc (deep) avec hardened runtime + entitlements.
+# --options runtime : conserve le flag runtime (CodeDirectory v=20500)
+# --entitlements : appliqué uniquement au binaire principal (pas aux frameworks)
 echo "Signature ad-hoc..."
-codesign --force --deep --sign - "$APP_DEST" 2>/dev/null
+codesign --force --deep --sign - --options runtime --entitlements "$ENTITLEMENTS_TEMP" "$APP_DEST"
+rm -f "$ENTITLEMENTS_TEMP"
 
 # Lancer
 echo "Lancement..."
