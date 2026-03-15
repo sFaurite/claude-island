@@ -27,8 +27,17 @@ final class MenuBarDetector: ObservableObject {
 
     private var cancellables = Set<AnyCancellable>()
     private var safetyTimer: Timer?
+    private var activity: NSObjectProtocol?
 
     init() {
+        // Prevent App Nap from suspending our fullscreen detection timer.
+        // Without this, the 2s safety timer gets coalesced/delayed indefinitely
+        // for LSUIElement apps that are never the frontmost process.
+        activity = Foundation.ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+            reason: "Fullscreen detection for notch wings"
+        )
+
         let nc = NSWorkspace.shared.notificationCenter
 
         nc.publisher(for: NSWorkspace.activeSpaceDidChangeNotification)
@@ -54,6 +63,7 @@ final class MenuBarDetector: ObservableObject {
 
     deinit {
         safetyTimer?.invalidate()
+        if let activity { Foundation.ProcessInfo.processInfo.endActivity(activity) }
     }
 
     private func scheduleCheck() {
