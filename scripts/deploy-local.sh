@@ -1,6 +1,6 @@
 #!/bin/bash
 # Deploy Claude Island locally (build Release + install in /Applications)
-set -e
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -13,13 +13,14 @@ echo ""
 
 cd "$PROJECT_DIR"
 
-# Build Release
+# Build Release (clean pour éviter un binaire obsolète issu du cache incrémental)
 echo "Build Release..."
+rm -rf "$BUILD_DIR"
 xcodebuild -project ClaudeIsland.xcodeproj \
     -scheme ClaudeIsland \
     -configuration Release \
     -derivedDataPath "$BUILD_DIR" \
-    build 2>&1 | tail -5
+    clean build 2>&1 | tail -20
 
 APP_SRC="$BUILD_DIR/Build/Products/Release/$APP_NAME.app"
 
