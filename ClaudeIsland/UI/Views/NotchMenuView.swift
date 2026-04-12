@@ -44,6 +44,7 @@ struct NotchMenuView: View {
     @State private var launchAtLogin: Bool = false
     @State private var showTotalCount: Bool = AppSettings.showTotalSessionCount
     @State private var showActiveCount: Bool = AppSettings.showActiveSessionCount
+    @State private var autoOpenOnHover: Bool = AppSettings.autoOpenOnHover
     @State private var showWings: Bool = AppSettings.showWingsInFullscreen
     @State private var wingsFontSize: CGFloat = AppSettings.wingsFontSize
     @State private var wingsLayout: WingsLayout = AppSettings.wingsLayout
@@ -154,6 +155,14 @@ struct NotchMenuView: View {
                     AppSettings.showActiveSessionCount = showActiveCount
                 }
                 MenuToggleRow(
+                    icon: "hand.point.up.left",
+                    label: "Auto-Open on Hover",
+                    isOn: autoOpenOnHover
+                ) {
+                    autoOpenOnHover.toggle()
+                    AppSettings.autoOpenOnHover = autoOpenOnHover
+                }
+                MenuToggleRow(
                     icon: "sidebar.squares.leading",
                     label: "Fullscreen Wings",
                     isOn: showWings
@@ -243,6 +252,7 @@ struct NotchMenuView: View {
         showWings = AppSettings.showWingsInFullscreen
         viewModel.showWingsSettings = showWings
         wingsElements = AppSettings.wingsElements
+        autoOpenOnHover = AppSettings.autoOpenOnHover
     }
 }
 

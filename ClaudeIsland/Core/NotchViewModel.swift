@@ -226,7 +226,7 @@ class NotchViewModel: ObservableObject {
         hoverTimer = nil
 
         // Start hover timer to auto-expand after 1 second
-        if isHovering && (status == .closed || status == .popping) {
+        if isHovering && (status == .closed || status == .popping) && AppSettings.autoOpenOnHover {
             let workItem = DispatchWorkItem { [weak self] in
                 guard let self = self, self.isHovering else { return }
                 self.notchOpen(reason: .hover)
