@@ -190,7 +190,7 @@ enum AppSettings {
         static let isHideShortcutEnabled = "isHideShortcutEnabled"
         static let showTotalSessionCount = "showTotalSessionCount"
         static let showActiveSessionCount = "showActiveSessionCount"
-        static let autoOpenOnHover = "autoOpenOnHover"
+        static let autoOpenNotch = "autoOpenNotch"
         static let maxNotificationVolume = "maxNotificationVolume"
         static let showWingsInFullscreen = "showWingsInFullscreen"
         static let wingsFontSize = "wingsFontSize"
@@ -292,14 +292,15 @@ enum AppSettings {
 
     // MARK: - Auto-Open
 
-    /// Whether the notch opens automatically when the mouse hovers over it
-    static var autoOpenOnHover: Bool {
+    /// Whether the notch opens automatically (on hover and on session notifications).
+    /// When false, the notch only opens via explicit user actions (click, hotkey).
+    static var autoOpenNotch: Bool {
         get {
-            if defaults.object(forKey: Keys.autoOpenOnHover) == nil { return true }
-            return defaults.bool(forKey: Keys.autoOpenOnHover)
+            if defaults.object(forKey: Keys.autoOpenNotch) == nil { return true }
+            return defaults.bool(forKey: Keys.autoOpenNotch)
         }
         set {
-            defaults.set(newValue, forKey: Keys.autoOpenOnHover)
+            defaults.set(newValue, forKey: Keys.autoOpenNotch)
         }
     }
 
