@@ -207,6 +207,15 @@ struct NotchMenuView: View {
             getShortcut: { AppSettings.hideShortcut },
             setShortcut: { AppSettings.hideShortcut = $0 }
         )
+        ShortcutRecorderRow(
+            icon: "eye.slash.fill",
+            label: "Hide All",
+            hotkeyID: 3,
+            getEnabled: { AppSettings.isHideAllShortcutEnabled },
+            setEnabled: { AppSettings.isHideAllShortcutEnabled = $0 },
+            getShortcut: { AppSettings.hideAllShortcut },
+            setShortcut: { AppSettings.hideAllShortcut = $0 }
+        )
     }
 
     @ViewBuilder

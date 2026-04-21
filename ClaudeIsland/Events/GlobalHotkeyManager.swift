@@ -18,8 +18,11 @@ class GlobalHotkeyManager {
     /// Fires when the toggle hotkey is triggered (ID=1)
     let hotkeyTriggered = PassthroughSubject<Void, Never>()
 
-    /// Fires when the hide hotkey is triggered (ID=2)
+    /// Fires when the hide-notch hotkey is triggered (ID=2)
     let hideHotkeyTriggered = PassthroughSubject<Void, Never>()
+
+    /// Fires when the hide-all hotkey is triggered (ID=3)
+    let hideAllHotkeyTriggered = PassthroughSubject<Void, Never>()
 
     private var hotkeyRefs: [UInt32: EventHotKeyRef] = [:]
     private var eventHandlerRef: EventHandlerRef?
@@ -121,6 +124,8 @@ class GlobalHotkeyManager {
                         manager.hotkeyTriggered.send()
                     case 2:
                         manager.hideHotkeyTriggered.send()
+                    case 3:
+                        manager.hideAllHotkeyTriggered.send()
                     default:
                         break
                     }

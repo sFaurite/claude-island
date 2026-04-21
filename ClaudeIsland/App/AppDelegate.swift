@@ -60,6 +60,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if AppSettings.isHideShortcutEnabled {
             GlobalHotkeyManager.shared.register(shortcut: AppSettings.hideShortcut, id: 2)
         }
+        if AppSettings.isHideAllShortcutEnabled {
+            GlobalHotkeyManager.shared.register(shortcut: AppSettings.hideAllShortcut, id: 3)
+        }
 
         if updater.canCheckForUpdates {
             updater.checkForUpdates()

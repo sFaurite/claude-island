@@ -47,6 +47,8 @@ class NotchViewModel: ObservableObject {
     @Published var contentType: NotchContentType = .instances
     @Published var isHovering: Bool = false
     @Published var isWindowHidden: Bool = false
+    /// When true, the notch pill is hidden but the fullscreen wings stay visible.
+    @Published var isNotchHidden: Bool = false
     @Published var selectedSettingsTab: SettingsTab = .appearance
     @Published var showWingsSettings: Bool = AppSettings.showWingsInFullscreen
     @Published var wingsVisible: Bool = false
@@ -85,7 +87,7 @@ class NotchViewModel: ObservableObject {
             case .appearance:
                 menuExtra = showWingsSettings ? 240 : 100
             case .shortcuts:
-                menuExtra = 0
+                menuExtra = 80
             case .system:
                 menuExtra = 20
             }
@@ -163,6 +165,13 @@ class NotchViewModel: ObservableObject {
         GlobalHotkeyManager.shared.hideHotkeyTriggered
             .receive(on: DispatchQueue.main)
             .sink { [weak self] in
+                self?.toggleNotchHidden()
+            }
+            .store(in: &cancellables)
+
+        GlobalHotkeyManager.shared.hideAllHotkeyTriggered
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] in
                 self?.toggleWindowHidden()
             }
             .store(in: &cancellables)
@@ -172,7 +181,18 @@ class NotchViewModel: ObservableObject {
         isWindowHidden.toggle()
     }
 
+    /// Toggle notch-only visibility. Wings remain visible in fullscreen.
+    private func toggleNotchHidden() {
+        isNotchHidden.toggle()
+        if isNotchHidden && status == .opened {
+            notchClose()
+        }
+    }
+
     private func handleHotkeyToggle() {
+        // A show hotkey should always reveal the notch, even if previously force-hidden.
+        if isNotchHidden { isNotchHidden = false }
+        if isWindowHidden { isWindowHidden = false }
         if status == .opened {
             notchClose()
         } else {
@@ -226,7 +246,7 @@ class NotchViewModel: ObservableObject {
         hoverTimer = nil
 
         // Start hover timer to auto-expand after 1 second
-        if isHovering && (status == .closed || status == .popping) && AppSettings.autoOpenNotch {
+        if isHovering && (status == .closed || status == .popping) && AppSettings.autoOpenNotch && !isNotchHidden {
             let workItem = DispatchWorkItem { [weak self] in
                 guard let self = self, self.isHovering else { return }
                 self.notchOpen(reason: .hover)
@@ -252,7 +272,7 @@ class NotchViewModel: ObservableObject {
                 }
             }
         case .closed, .popping:
-            if geometry.isPointInNotch(location) {
+            if geometry.isPointInNotch(location) && !isNotchHidden {
                 notchOpen(reason: .click)
             }
             // Collapse expanded wing section when clicking outside wings area

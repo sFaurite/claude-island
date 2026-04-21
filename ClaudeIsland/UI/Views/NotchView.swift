@@ -226,6 +226,8 @@ struct NotchView: View {
                             viewModel.notchOpen(reason: .click)
                         }
                     }
+                    .opacity(viewModel.isNotchHidden ? 0 : 1)
+                    .allowsHitTesting(!viewModel.isNotchHidden)
             }
         }
         .opacity(isVisible ? 1 : 0)

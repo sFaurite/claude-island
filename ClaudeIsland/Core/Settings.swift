@@ -16,16 +16,22 @@ struct KeyboardShortcut: Codable, Equatable {
     let keyCode: UInt32
     let modifierFlags: UInt32
 
-    /// Default toggle shortcut: ⌘⇧N
+    /// Default toggle shortcut: ⌃Esc
     static let `default` = KeyboardShortcut(
-        keyCode: UInt32(kVK_ANSI_N),
-        modifierFlags: UInt32(cmdKey | shiftKey)
+        keyCode: UInt32(kVK_Escape),
+        modifierFlags: UInt32(controlKey)
     )
 
-    /// Default hide shortcut: ⌘⇧H
+    /// Default hide-notch shortcut: ⌘⇧H (hides only the notch pill, keeps the wings)
     static let defaultHide = KeyboardShortcut(
         keyCode: UInt32(kVK_ANSI_H),
         modifierFlags: UInt32(cmdKey | shiftKey)
+    )
+
+    /// Default hide-all shortcut: ⌃⌥⇧Esc (hides the notch AND the fullscreen wings)
+    static let defaultHideAll = KeyboardShortcut(
+        keyCode: UInt32(kVK_Escape),
+        modifierFlags: UInt32(controlKey | optionKey | shiftKey)
     )
 
     /// Human-readable display string (e.g. "⌘⇧N")
@@ -188,6 +194,8 @@ enum AppSettings {
         static let isShortcutEnabled = "isShortcutEnabled"
         static let hideShortcut = "hideShortcut"
         static let isHideShortcutEnabled = "isHideShortcutEnabled"
+        static let hideAllShortcut = "hideAllShortcut"
+        static let isHideAllShortcutEnabled = "isHideAllShortcutEnabled"
         static let showTotalSessionCount = "showTotalSessionCount"
         static let showActiveSessionCount = "showActiveSessionCount"
         static let autoOpenNotch = "autoOpenNotch"
@@ -262,6 +270,35 @@ enum AppSettings {
         set {
             if let data = try? JSONEncoder().encode(newValue) {
                 defaults.set(data, forKey: Keys.hideShortcut)
+            }
+        }
+    }
+
+    // MARK: - Hide-All Shortcut
+
+    /// Whether the hide-all shortcut (notch + wings) is enabled
+    static var isHideAllShortcutEnabled: Bool {
+        get {
+            if defaults.object(forKey: Keys.isHideAllShortcutEnabled) == nil { return true }
+            return defaults.bool(forKey: Keys.isHideAllShortcutEnabled)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.isHideAllShortcutEnabled)
+        }
+    }
+
+    /// The keyboard shortcut used to hide everything (notch + fullscreen wings)
+    static var hideAllShortcut: KeyboardShortcut {
+        get {
+            guard let data = defaults.data(forKey: Keys.hideAllShortcut),
+                  let shortcut = try? JSONDecoder().decode(KeyboardShortcut.self, from: data) else {
+                return .defaultHideAll
+            }
+            return shortcut
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue) {
+                defaults.set(data, forKey: Keys.hideAllShortcut)
             }
         }
     }
