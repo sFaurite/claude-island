@@ -46,6 +46,7 @@ Wings automatically hide when a terminal is in fullscreen:
 - **App Nap prevention** — Ensures the fullscreen detection timer is never delayed by macOS power management
 - **Removed Mixpanel analytics** — No telemetry in this fork
 - **Local deploy script** (`scripts/deploy-local.sh`) — Build, sign, and install in one command with proper entitlement preservation
+- **Remote session aggregation** — Stats also scan `~/.claude-island/projects/` if present, so Claude Code sessions mirrored from a remote machine (Mutagen, rsync, Syncthing…) are included in token totals and heatmap
 
 ## Features (from upstream)
 
