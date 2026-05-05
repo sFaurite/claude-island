@@ -16,6 +16,8 @@ import { randomBytes } from 'crypto';
 
 const CLAUDE_DIR = join(homedir(), '.claude');
 const PROJECTS_DIR = join(CLAUDE_DIR, 'projects');
+const ISLAND_PROJECTS_DIR = join(homedir(), '.claude-island', 'projects');
+const CLI_PROJECT_ROOTS = [PROJECTS_DIR, ISLAND_PROJECTS_DIR];
 const DESKTOP_AGENT_DIR = join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions');
 const CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json');
 const BASE_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache-base.json');
@@ -45,14 +47,26 @@ function nextDay(dateStr) {
 function findSessionFiles() {
   const files = [];
 
-  // ── CLI sessions: ~/.claude/projects/*/*.jsonl + subagents ──
+  // ── CLI sessions: scan multi-racines (local Mac + miroir VM via sandbox-sync)
+  for (const root of CLI_PROJECT_ROOTS) {
+    scanCliRoot(root, files);
+  }
+
+  // ── Desktop local-agent-mode sessions ──
+  // ~/Library/Application Support/Claude/local-agent-mode-sessions/…/.claude/projects/…/*.jsonl
+  findDesktopAgentFiles(DESKTOP_AGENT_DIR, files);
+
+  return files;
+}
+
+function scanCliRoot(rootDir, files) {
   let projEntries;
-  try { projEntries = readdirSync(PROJECTS_DIR, { withFileTypes: true }); }
-  catch { projEntries = []; }
+  try { projEntries = readdirSync(rootDir, { withFileTypes: true }); }
+  catch { return; }
 
   for (const proj of projEntries) {
     if (!proj.isDirectory()) continue;
-    const projDir = join(PROJECTS_DIR, proj.name);
+    const projDir = join(rootDir, proj.name);
     let entries;
     try { entries = readdirSync(projDir, { withFileTypes: true }); }
     catch { continue; }
@@ -74,12 +88,6 @@ function findSessionFiles() {
       }
     }
   }
-
-  // ── Desktop local-agent-mode sessions ──
-  // ~/Library/Application Support/Claude/local-agent-mode-sessions/…/.claude/projects/…/*.jsonl
-  findDesktopAgentFiles(DESKTOP_AGENT_DIR, files);
-
-  return files;
 }
 
 function findDesktopAgentFiles(dir, files) {
