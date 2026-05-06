@@ -1,13 +1,19 @@
 #!/usr/bin/env node
 // refresh-claude-stats.mjs
-// Réplique exacte de la logique interne de Claude Code pour
-// recalculer le cache de statistiques (~/.claude/stats-cache.json).
+// Recalcule complètement le cache de statistiques (~/.claude/stats-cache.json)
+// à partir de tous les fichiers de session JSONL trouvés.
 //
-// Usage : node refresh-claude-stats.mjs [--force]
+// Usage : node refresh-claude-stats.mjs
 //
-// Architecture : deux fichiers de cache
-//   - stats-cache-base.json : données scellées (jusqu'à hier), mis à jour 1x/jour
-//   - stats-cache.json      : base + données du jour, recalculé à chaque exécution
+// Sources scannées :
+//   - ~/.claude/projects/                    (CLI sessions Mac local)
+//   - ~/.claude-island/projects/             (miroir VM via sandbox-sync Mutagen)
+//   - ~/Library/.../local-agent-mode-sessions/ (Desktop agent mode)
+//
+// Le scan complet (~17k fichiers) prend ~1-2s. Conçu pour tourner via launchd
+// toutes les heures. La stratégie "scellement par jour" a été abandonnée car
+// la sync Mutagen asynchrone livre les sessions VM avec un délai variable —
+// figer une journée trop tôt produisait des totaux fortement sous-estimés.
 
 import { readFileSync, writeFileSync, readdirSync, statSync, renameSync, unlinkSync, existsSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
@@ -15,47 +21,20 @@ import { homedir } from 'os';
 import { randomBytes } from 'crypto';
 
 const CLAUDE_DIR = join(homedir(), '.claude');
-const PROJECTS_DIR = join(CLAUDE_DIR, 'projects');
-const ISLAND_PROJECTS_DIR = join(homedir(), '.claude-island', 'projects');
-const CLI_PROJECT_ROOTS = [PROJECTS_DIR, ISLAND_PROJECTS_DIR];
+const CLI_PROJECT_ROOTS = [
+  join(CLAUDE_DIR, 'projects'),
+  join(homedir(), '.claude-island', 'projects'),
+];
 const DESKTOP_AGENT_DIR = join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions');
 const CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json');
-const BASE_CACHE_FILE = join(CLAUDE_DIR, 'stats-cache-base.json');
 const CACHE_VERSION = 2;
-const FORCE = process.argv.includes('--force');
-
-// ── Utilitaires dates ──────────────────────────────────────────────
-
-function toDateStr(d) {
-  return d.toISOString().split('T')[0];
-}
-
-function yesterday() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return toDateStr(d);
-}
-
-function nextDay(dateStr) {
-  const d = new Date(dateStr + 'T00:00:00');
-  d.setDate(d.getDate() + 1);
-  return toDateStr(d);
-}
 
 // ── Découverte des fichiers de session ─────────────────────────────
 
 function findSessionFiles() {
   const files = [];
-
-  // ── CLI sessions: scan multi-racines (local Mac + miroir VM via sandbox-sync)
-  for (const root of CLI_PROJECT_ROOTS) {
-    scanCliRoot(root, files);
-  }
-
-  // ── Desktop local-agent-mode sessions ──
-  // ~/Library/Application Support/Claude/local-agent-mode-sessions/…/.claude/projects/…/*.jsonl
+  for (const root of CLI_PROJECT_ROOTS) scanCliRoot(root, files);
   findDesktopAgentFiles(DESKTOP_AGENT_DIR, files);
-
   return files;
 }
 
@@ -75,7 +54,6 @@ function scanCliRoot(rootDir, files) {
       if (entry.isFile() && entry.name.endsWith('.jsonl')) {
         files.push(join(projDir, entry.name));
       }
-      // Sous-agents
       if (entry.isDirectory()) {
         const subDir = join(projDir, entry.name, 'subagents');
         try {
@@ -96,11 +74,8 @@ function findDesktopAgentFiles(dir, files) {
   catch { return; }
   for (const entry of entries) {
     const full = join(dir, entry.name);
-    if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-      files.push(full);
-    } else if (entry.isDirectory()) {
-      findDesktopAgentFiles(full, files);
-    }
+    if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push(full);
+    else if (entry.isDirectory()) findDesktopAgentFiles(full, files);
   }
 }
 
@@ -116,37 +91,30 @@ function parseSessionFile(filePath) {
   return entries;
 }
 
-// Réplique exacte de isTranscriptMessage (ad) du binaire
+// Réplique exacte de isTranscriptMessage du binaire Claude Code
 function isMessage(entry) {
   return entry.type === 'user' || entry.type === 'assistant' ||
          entry.type === 'attachment' || entry.type === 'system' ||
          entry.type === 'progress';
 }
 
-// ── Traitement des sessions (réplique de qyR) ─────────────────────
+// ── Calcul des statistiques (réplique de qyR / DuA combinés) ──────
 
-function processSessionFiles(files, { fromDate, toDate } = {}) {
+function computeStats(files) {
   const dailyActivity = new Map();
   const dailyModelTokens = new Map();
-  const sessionStats = [];
   const hourCounts = new Map();
   const modelUsage = {};
+  let totalSessions = 0;
   let totalMessages = 0;
   let totalSpeculationTimeSavedMs = 0;
+  let firstSessionDate = null;
+  let longestSession = null;
 
   for (const file of files) {
-    // Optimisation : sauter les fichiers non modifiés depuis fromDate
-    if (fromDate) {
-      try {
-        const mtime = toDateStr(statSync(file).mtime);
-        if (mtime < fromDate) continue;
-      } catch {}
-    }
-
     const entries = parseSessionFile(file);
     const sessionId = basename(file, '.jsonl');
 
-    // Séparer messages et speculation-accept
     const messages = [];
     for (const e of entries) {
       if (isMessage(e)) messages.push(e);
@@ -155,7 +123,6 @@ function processSessionFiles(files, { fromDate, toDate } = {}) {
       }
     }
 
-    // Filtrer les sidechain
     const main = messages.filter(m => !m.isSidechain);
     if (main.length === 0) continue;
 
@@ -164,32 +131,26 @@ function processSessionFiles(files, { fromDate, toDate } = {}) {
     const firstDate = new Date(first.timestamp);
     const lastDate = new Date(last.timestamp);
     if (isNaN(firstDate.getTime()) || isNaN(lastDate.getTime())) continue;
-    const dateStr = toDateStr(firstDate);
+    const dateStr = firstDate.toISOString().split('T')[0];
 
-    // Filtres de dates
-    if (fromDate && dateStr < fromDate) continue;
-    if (toDate && toDate < dateStr) continue;
-
-    // Stats de session
     const duration = lastDate.getTime() - firstDate.getTime();
-    sessionStats.push({ sessionId, duration, messageCount: main.length, timestamp: first.timestamp });
+    if (!longestSession || duration > longestSession.duration) {
+      longestSession = { sessionId, duration, messageCount: main.length, timestamp: first.timestamp };
+    }
+    if (!firstSessionDate || first.timestamp < firstSessionDate) firstSessionDate = first.timestamp;
+    totalSessions++;
     totalMessages += main.length;
 
-    // Activité journalière
     const daily = dailyActivity.get(dateStr) || { date: dateStr, messageCount: 0, sessionCount: 0, toolCallCount: 0 };
     daily.sessionCount++;
     daily.messageCount += main.length;
     dailyActivity.set(dateStr, daily);
 
-    // Compteur horaire
-    const hour = firstDate.getHours();
-    hourCounts.set(hour, (hourCounts.get(hour) || 0) + 1);
+    hourCounts.set(firstDate.getHours(), (hourCounts.get(firstDate.getHours()) || 0) + 1);
 
-    // Messages assistant : tokens + tool calls
     for (const msg of main) {
       if (msg.type !== 'assistant') continue;
 
-      // Tool calls
       const content = msg.message?.content;
       if (Array.isArray(content)) {
         for (const item of content) {
@@ -197,7 +158,6 @@ function processSessionFiles(files, { fromDate, toDate } = {}) {
         }
       }
 
-      // Token usage
       const usage = msg.message?.usage;
       const model = msg.message?.model;
       if (!usage || !model) continue;
@@ -226,113 +186,26 @@ function processSessionFiles(files, { fromDate, toDate } = {}) {
   }
 
   return {
+    version: CACHE_VERSION,
+    lastComputedDate: new Date().toISOString().split('T')[0],
     dailyActivity: [...dailyActivity.values()].sort((a, b) => a.date.localeCompare(b.date)),
     dailyModelTokens: [...dailyModelTokens.entries()]
       .map(([date, tokensByModel]) => ({ date, tokensByModel }))
       .sort((a, b) => a.date.localeCompare(b.date)),
-    modelUsage, sessionStats,
+    modelUsage,
+    totalSessions,
+    totalMessages,
+    longestSession,
+    firstSessionDate,
     hourCounts: Object.fromEntries(hourCounts),
-    totalMessages, totalSpeculationTimeSavedMs
-  };
-}
-
-// ── Fusion cache + nouvelles données (réplique de DuA) ─────────────
-
-function mergeStats(cached, newData, computeDate) {
-  // Daily activity
-  const dailyMap = new Map();
-  for (const d of cached.dailyActivity) dailyMap.set(d.date, { ...d });
-  for (const d of newData.dailyActivity) {
-    const e = dailyMap.get(d.date);
-    if (e) { e.messageCount += d.messageCount; e.sessionCount += d.sessionCount; e.toolCallCount += d.toolCallCount; }
-    else dailyMap.set(d.date, { ...d });
-  }
-
-  // Daily model tokens
-  const tokenMap = new Map();
-  for (const d of cached.dailyModelTokens) tokenMap.set(d.date, { ...d.tokensByModel });
-  for (const d of newData.dailyModelTokens) {
-    const e = tokenMap.get(d.date);
-    if (e) { for (const [m, c] of Object.entries(d.tokensByModel)) e[m] = (e[m] || 0) + c; }
-    else tokenMap.set(d.date, { ...d.tokensByModel });
-  }
-
-  // Model usage
-  const mu = { ...cached.modelUsage };
-  for (const [model, u] of Object.entries(newData.modelUsage)) {
-    if (mu[model]) {
-      mu[model] = {
-        inputTokens: mu[model].inputTokens + u.inputTokens,
-        outputTokens: mu[model].outputTokens + u.outputTokens,
-        cacheReadInputTokens: mu[model].cacheReadInputTokens + u.cacheReadInputTokens,
-        cacheCreationInputTokens: mu[model].cacheCreationInputTokens + u.cacheCreationInputTokens,
-        webSearchRequests: mu[model].webSearchRequests + u.webSearchRequests,
-        costUSD: mu[model].costUSD + u.costUSD,
-        contextWindow: Math.max(mu[model].contextWindow, u.contextWindow),
-        maxOutputTokens: Math.max(mu[model].maxOutputTokens, u.maxOutputTokens)
-      };
-    } else mu[model] = { ...u };
-  }
-
-  // Hour counts
-  const hc = { ...cached.hourCounts };
-  for (const [h, c] of Object.entries(newData.hourCounts)) {
-    const k = parseInt(h, 10);
-    hc[k] = (hc[k] || 0) + c;
-  }
-
-  // Longest session
-  let longest = cached.longestSession;
-  for (const s of newData.sessionStats) {
-    if (!longest || s.duration > longest.duration) longest = s;
-  }
-
-  // First session date
-  let firstDate = cached.firstSessionDate;
-  for (const s of newData.sessionStats) {
-    if (!firstDate || s.timestamp < firstDate) firstDate = s.timestamp;
-  }
-
-  return {
-    version: CACHE_VERSION,
-    lastComputedDate: computeDate,
-    dailyActivity: [...dailyMap.values()].sort((a, b) => a.date.localeCompare(b.date)),
-    dailyModelTokens: [...tokenMap.entries()]
-      .map(([date, tokensByModel]) => ({ date, tokensByModel }))
-      .sort((a, b) => a.date.localeCompare(b.date)),
-    modelUsage: mu,
-    totalSessions: cached.totalSessions + newData.sessionStats.length,
-    totalMessages: cached.totalMessages + newData.sessionStats.reduce((s, x) => s + x.messageCount, 0),
-    longestSession: longest,
-    firstSessionDate: firstDate,
-    hourCounts: hc,
-    totalSpeculationTimeSavedMs: cached.totalSpeculationTimeSavedMs + newData.totalSpeculationTimeSavedMs
+    totalSpeculationTimeSavedMs,
   };
 }
 
 // ── Cache I/O ──────────────────────────────────────────────────────
 
-function emptyCache() {
-  return {
-    version: CACHE_VERSION, lastComputedDate: null,
-    dailyActivity: [], dailyModelTokens: [], modelUsage: {},
-    totalSessions: 0, totalMessages: 0, longestSession: null,
-    firstSessionDate: null, hourCounts: {}, totalSpeculationTimeSavedMs: 0
-  };
-}
-
-function loadCacheFromFile(path) {
-  try {
-    const data = JSON.parse(readFileSync(path, 'utf-8'));
-    if (data.version !== CACHE_VERSION) return null;
-    if (!Array.isArray(data.dailyActivity) || !Array.isArray(data.dailyModelTokens)) return null;
-    return data;
-  } catch { return null; }
-}
-
 function saveCacheToFile(data, path) {
-  const dir = CLAUDE_DIR;
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  if (!existsSync(CLAUDE_DIR)) mkdirSync(CLAUDE_DIR, { recursive: true });
   const tmp = `${path}.${randomBytes(8).toString('hex')}.tmp`;
   try {
     writeFileSync(tmp, JSON.stringify(data, null, 2), { encoding: 'utf-8', mode: 0o600 });
@@ -346,54 +219,11 @@ function saveCacheToFile(data, path) {
 // ── Main ──────────────────────────────────────────────────────────
 
 const files = findSessionFiles();
-if (files.length === 0) { console.log('Aucun fichier de session trouvé.'); process.exit(0); }
-
-const today = toDateStr(new Date());
-const yday = yesterday();
-
-// Étape 1 : Mettre à jour le cache de base (données scellées, jusqu'à hier)
-let base = loadCacheFromFile(BASE_CACHE_FILE);
-if (!base) {
-  // Migration : initialiser depuis le cache principal existant
-  const existing = loadCacheFromFile(CACHE_FILE);
-  if (existing && existing.lastComputedDate && existing.lastComputedDate <= yday) {
-    base = existing;
-    saveCacheToFile(base, BASE_CACHE_FILE);
-    console.log(`Base initialisée depuis le cache existant (${base.lastComputedDate}).`);
-  } else {
-    base = emptyCache();
-  }
+if (files.length === 0) {
+  console.log('Aucun fichier de session trouvé.');
+  process.exit(0);
 }
 
-if (FORCE || !base.lastComputedDate) {
-  console.log(`Calcul complet (${files.length} fichiers)...`);
-  const data = processSessionFiles(files, { toDate: yday });
-  base = data.sessionStats.length > 0
-    ? mergeStats(emptyCache(), data, yday)
-    : { ...emptyCache(), lastComputedDate: yday };
-  saveCacheToFile(base, BASE_CACHE_FILE);
-
-} else if (base.lastComputedDate < yday) {
-  const from = nextDay(base.lastComputedDate);
-  console.log(`Incrémental base : ${from} → ${yday}...`);
-  const data = processSessionFiles(files, { fromDate: from, toDate: yday });
-  if (data.sessionStats.length > 0 || data.dailyActivity.length > 0) {
-    base = mergeStats(base, data, yday);
-  } else {
-    base = { ...base, lastComputedDate: yday };
-  }
-  saveCacheToFile(base, BASE_CACHE_FILE);
-}
-
-// Étape 2 : Calculer les données du jour et fusionner avec la base
-const todayData = processSessionFiles(files, { fromDate: today, toDate: today });
-let live;
-if (todayData.sessionStats.length > 0) {
-  live = mergeStats(base, todayData, today);
-  console.log(`+${todayData.sessionStats.length} sessions aujourd'hui`);
-} else {
-  live = { ...base, lastComputedDate: today };
-}
-saveCacheToFile(live, CACHE_FILE);
-
-console.log(`→ ${live.totalSessions} sessions, ${live.totalMessages} messages, lastComputedDate: ${live.lastComputedDate}`);
+const cache = computeStats(files);
+saveCacheToFile(cache, CACHE_FILE);
+console.log(`→ ${cache.totalSessions} sessions, ${cache.totalMessages} messages, lastComputedDate: ${cache.lastComputedDate}`);
