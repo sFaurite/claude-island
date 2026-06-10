@@ -21,6 +21,7 @@ final class NotchWingsController: ObservableObject {
     private static let logger = Logger(subsystem: "com.claudeisland", category: "NotchWingsController")
     private var refreshTimer: Timer?
     private var tickTimer: Timer?
+    private var activity: NSObjectProtocol?
 
     init() {
         // Rate limits : chargement instantané depuis le cache disque (~1ms)
@@ -47,6 +48,17 @@ final class NotchWingsController: ObservableObject {
     }
 
     func startAutoRefresh() {
+        // Prevent App Nap from suspending the refresh/tick timers.
+        // Without this, LSUIElement apps that are never frontmost see their
+        // scheduled timers coalesced indefinitely — the rate-limit pill freezes
+        // on a stale value (e.g. "4h") until a UI event wakes the runloop.
+        if activity == nil {
+            activity = Foundation.ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiatedAllowingIdleSystemSleep],
+                reason: "Notch wings rate-limit refresh"
+            )
+        }
+
         refresh()
         refreshTimer?.invalidate()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
@@ -68,6 +80,10 @@ final class NotchWingsController: ObservableObject {
         refreshTimer = nil
         tickTimer?.invalidate()
         tickTimer = nil
+        if let activity {
+            Foundation.ProcessInfo.processInfo.endActivity(activity)
+            self.activity = nil
+        }
     }
 
     private func fetchRateLimits() async -> RateLimitData? {
