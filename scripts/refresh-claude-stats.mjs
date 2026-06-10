@@ -14,6 +14,14 @@
 // toutes les heures. La stratégie "scellement par jour" a été abandonnée car
 // la sync Mutagen asynchrone livre les sessions VM avec un délai variable —
 // figer une journée trop tôt produisait des totaux fortement sous-estimés.
+//
+// Correctifs portés depuis claude-stats.py (sandbox Cerema, 2026-06) :
+//   1. Scan récursif complet des projects/ — inclut les transcripts des
+//      subagents (<session>/subagents/) et des workflows
+//      (subagents/workflows/wf_*/), et les tokens des messages
+//      isSidechain=true entrent dans les compteurs de tokens.
+//   2. Dédup des blocs usage par message.id — une réponse multi-tool-calls
+//      est écrite sur N lignes recopiant le même usage.
 
 import { readFileSync, writeFileSync, readdirSync, statSync, renameSync, unlinkSync, existsSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
@@ -38,33 +46,20 @@ function findSessionFiles() {
   return files;
 }
 
+// Walk récursif complet : les transcripts des subagents (tool Agent) vivent
+// sous <projet>/<session>/subagents/, et ceux des workflows encore plus bas
+// (subagents/workflows/wf_*/agent-*.jsonl) — un scan à profondeur fixe les
+// ratait entièrement (≈1M tokens/jour sur les grosses journées workflow).
+// Les dossiers subagents/ survivent parfois à la purge du .jsonl parent
+// (cleanupPeriodDays), donc le récursif récupère aussi des jours orphelins.
 function scanCliRoot(rootDir, files) {
-  let projEntries;
-  try { projEntries = readdirSync(rootDir, { withFileTypes: true }); }
+  let entries;
+  try { entries = readdirSync(rootDir, { withFileTypes: true }); }
   catch { return; }
-
-  for (const proj of projEntries) {
-    if (!proj.isDirectory()) continue;
-    const projDir = join(rootDir, proj.name);
-    let entries;
-    try { entries = readdirSync(projDir, { withFileTypes: true }); }
-    catch { continue; }
-
-    for (const entry of entries) {
-      if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-        files.push(join(projDir, entry.name));
-      }
-      if (entry.isDirectory()) {
-        const subDir = join(projDir, entry.name, 'subagents');
-        try {
-          for (const sf of readdirSync(subDir, { withFileTypes: true })) {
-            if (sf.isFile() && sf.name.endsWith('.jsonl') && sf.name.startsWith('agent-')) {
-              files.push(join(subDir, sf.name));
-            }
-          }
-        } catch {}
-      }
-    }
+  for (const entry of entries) {
+    const full = join(rootDir, entry.name);
+    if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push(full);
+    else if (entry.isDirectory()) scanCliRoot(full, files);
   }
 }
 
@@ -110,6 +105,15 @@ function computeStats(files) {
   let totalSpeculationTimeSavedMs = 0;
   let firstSessionDate = null;
   let longestSession = null;
+  // Dédup globale des blocs usage, partagée entre tous les fichiers du scan.
+  // Une réponse de l'agent qui fait N tool-calls en parallèle est écrite sur
+  // N lignes JSONL partageant le même message.id mais des timestamps
+  // distincts, et CHAQUE ligne recopie le bloc `usage` complet (mêmes
+  // tokens) — sans dédup on recompte N fois la même réponse (jusqu'à ×10
+  // d'inflation constatée sur une journée chargée). Les blocs `content`,
+  // eux, sont distincts par ligne : tool calls et messages restent comptés
+  // par ligne. Clé primaire = message.id, fallback (sessionId, timestamp).
+  const seenUsage = new Set();
 
   for (const file of files) {
     const entries = parseSessionFile(file);
@@ -123,6 +127,46 @@ function computeStats(files) {
       }
     }
 
+    // ── Tokens : tous les messages assistant, sidechains inclus ──
+    // Les transcripts subagents/workflows portent isSidechain=true sur
+    // toutes leurs lignes ; les exclure ferait perdre leurs tokens.
+    for (const msg of messages) {
+      if (msg.type !== 'assistant') continue;
+      const usage = msg.message?.usage;
+      const model = msg.message?.model;
+      if (!usage || !model) continue;
+      const msgDate = new Date(msg.timestamp);
+      if (isNaN(msgDate.getTime())) continue;
+
+      const mid = msg.message?.id;
+      const key = mid ? `msg:${mid}` : `${msg.sessionId || sessionId}|${msg.timestamp}`;
+      if (seenUsage.has(key)) continue;
+      seenUsage.add(key);
+
+      if (!modelUsage[model]) {
+        modelUsage[model] = {
+          inputTokens: 0, outputTokens: 0,
+          cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+          webSearchRequests: 0, costUSD: 0,
+          contextWindow: 0, maxOutputTokens: 0
+        };
+      }
+      const mu = modelUsage[model];
+      mu.inputTokens += usage.input_tokens || 0;
+      mu.outputTokens += usage.output_tokens || 0;
+      mu.cacheReadInputTokens += usage.cache_read_input_tokens || 0;
+      mu.cacheCreationInputTokens += usage.cache_creation_input_tokens || 0;
+
+      const totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
+      if (totalTokens > 0) {
+        const msgDay = msgDate.toISOString().split('T')[0];
+        const dayTokens = dailyModelTokens.get(msgDay) || {};
+        dayTokens[model] = (dayTokens[model] || 0) + totalTokens;
+        dailyModelTokens.set(msgDay, dayTokens);
+      }
+    }
+
+    // ── Activité (sessions, messages, heures) : messages principaux ──
     const main = messages.filter(m => !m.isSidechain);
     if (main.length === 0) continue;
 
@@ -150,38 +194,21 @@ function computeStats(files) {
 
     for (const msg of main) {
       if (msg.type !== 'assistant') continue;
-
       const content = msg.message?.content;
       if (Array.isArray(content)) {
         for (const item of content) {
           if (item.type === 'tool_use') daily.toolCallCount++;
         }
       }
+    }
+  }
 
-      const usage = msg.message?.usage;
-      const model = msg.message?.model;
-      if (!usage || !model) continue;
-
-      if (!modelUsage[model]) {
-        modelUsage[model] = {
-          inputTokens: 0, outputTokens: 0,
-          cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
-          webSearchRequests: 0, costUSD: 0,
-          contextWindow: 0, maxOutputTokens: 0
-        };
-      }
-      const mu = modelUsage[model];
-      mu.inputTokens += usage.input_tokens || 0;
-      mu.outputTokens += usage.output_tokens || 0;
-      mu.cacheReadInputTokens += usage.cache_read_input_tokens || 0;
-      mu.cacheCreationInputTokens += usage.cache_creation_input_tokens || 0;
-
-      const totalTokens = (usage.input_tokens || 0) + (usage.output_tokens || 0);
-      if (totalTokens > 0) {
-        const dayTokens = dailyModelTokens.get(dateStr) || {};
-        dayTokens[model] = (dayTokens[model] || 0) + totalTokens;
-        dailyModelTokens.set(dateStr, dayTokens);
-      }
+  // Jours présents uniquement via des tokens subagents/workflows (sessions
+  // principales purgées) : créer une entrée d'activité vide pour que la
+  // heatmap, construite sur dailyActivity, affiche ces jours orphelins.
+  for (const date of dailyModelTokens.keys()) {
+    if (!dailyActivity.has(date)) {
+      dailyActivity.set(date, { date, messageCount: 0, sessionCount: 0, toolCallCount: 0 });
     }
   }
 
