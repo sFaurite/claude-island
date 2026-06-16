@@ -53,6 +53,15 @@ struct StatsReader: Sendable {
         f.timeZone = .current
         return f
     }()
+    // Le cache (refresh-claude-stats.mjs) regroupe les jours via toISOString,
+    // donc en UTC. On utilise ce formateur UTC pour identifier « aujourd'hui »
+    // côté app, afin de viser exactement la même clé de jour que le cache.
+    private static let utcDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone(identifier: "UTC")
+        return f
+    }()
 
     static func read() -> DailyStats? {
         let path = FileManager.default.homeDirectoryForCurrentUser
@@ -68,7 +77,7 @@ struct StatsReader: Sendable {
             return nil
         }
 
-        let today = dateFormatter.string(from: Date())
+        let today = utcDateFormatter.string(from: Date())
 
         // Try today first, then fall back to most recent day
         let activity: DailyActivityEntry?
@@ -183,71 +192,49 @@ struct StatsReader: Sendable {
 
     /// Scans JSONL files modified today to compute live token usage.
     /// Sources: CLI sessions (Mac local + VM mirror via sandbox-sync), subagents,
-    /// and Desktop local-agent-mode sessions.
+    /// workflows, and Desktop local-agent-mode sessions.
+    ///
+    /// Aligné sur refresh-claude-stats.mjs (correctifs juin 2026) :
+    ///   1. Scan récursif complet — attrape aussi les transcripts subagents
+    ///      (<session>/subagents/) ET workflows (subagents/workflows/wf_*/),
+    ///      qu'un scan à profondeur fixe ratait (~1M tokens/jour workflow).
+    ///   2. Dédup des blocs usage par message.id — une réponse multi-tool-calls
+    ///      recopie le même bloc usage sur N lignes JSONL.
+    ///   3. Jour identifié en UTC (comme toISOString côté .mjs) : les timestamps
+    ///      JSONL sont en UTC, on compare donc un préfixe UTC.
     private static func readTodayLiveTokens() -> Int {
         let fm = FileManager.default
         let calendar = Calendar.current
+        // Pré-filtre mtime volontairement permissif : minuit local ≤ début du
+        // jour UTC en CEST, donc aucun fichier du jour UTC n'est écarté. Le
+        // filtre fin se fait sur le préfixe de timestamp, ligne par ligne.
         let todayStart = calendar.startOfDay(for: Date())
-        let todayPrefix = dateFormatter.string(from: Date()) // "yyyy-MM-dd"
+        let todayPrefix = utcDateFormatter.string(from: Date()) // "yyyy-MM-dd" UTC
 
+        // Dédup globale des blocs usage par message.id, partagée sur tout le scan.
+        var seenUsage = Set<String>()
         var totalTokens = 0
 
-        // ── CLI sessions: scan multi-racines (local Mac + miroir VM sandbox-sync) ──
+        // ── CLI sessions: scan récursif multi-racines (local Mac + miroir VM) ──
         let cliRoots = [
             fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects"),
             fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude-island/projects"),
         ]
         for root in cliRoots {
-            totalTokens += scanProjectRoot(root, todayStart: todayStart, todayPrefix: todayPrefix)
+            totalTokens += scanDirectoryRecursively(dir: root, todayStart: todayStart, todayPrefix: todayPrefix, seenUsage: &seenUsage)
         }
 
         // ── Desktop local-agent-mode sessions ──
         let desktopAgentDir = fm.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Claude/local-agent-mode-sessions")
-        totalTokens += scanDirectoryRecursively(dir: desktopAgentDir, todayStart: todayStart, todayPrefix: todayPrefix)
+        totalTokens += scanDirectoryRecursively(dir: desktopAgentDir, todayStart: todayStart, todayPrefix: todayPrefix, seenUsage: &seenUsage)
 
         return totalTokens
     }
 
-    /// Scans a single CLI projects root (`projects/<projDir>/*.jsonl` + subagents).
-    /// Returns 0 silently if the root doesn't exist (e.g. user without VM mirror).
-    private static func scanProjectRoot(_ projectsDir: URL, todayStart: Date, todayPrefix: String) -> Int {
-        let fm = FileManager.default
-        guard let projectDirs = try? fm.contentsOfDirectory(at: projectsDir, includingPropertiesForKeys: nil) else {
-            return 0
-        }
-        var tokens = 0
-        for projDir in projectDirs {
-            guard let items = try? fm.contentsOfDirectory(at: projDir, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey]) else {
-                continue
-            }
-            for item in items {
-                if item.pathExtension == "jsonl" {
-                    guard let attrs = try? item.resourceValues(forKeys: [.contentModificationDateKey]),
-                          let modDate = attrs.contentModificationDate,
-                          modDate >= todayStart else { continue }
-                    tokens += scanJsonlForTodayTokens(file: item, todayPrefix: todayPrefix)
-                    continue
-                }
-                let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-                guard isDir else { continue }
-                let subagentsDir = item.appendingPathComponent("subagents")
-                guard let subFiles = try? fm.contentsOfDirectory(at: subagentsDir, includingPropertiesForKeys: [.contentModificationDateKey]) else { continue }
-                for subFile in subFiles {
-                    guard subFile.pathExtension == "jsonl",
-                          subFile.lastPathComponent.hasPrefix("agent-") else { continue }
-                    guard let attrs = try? subFile.resourceValues(forKeys: [.contentModificationDateKey]),
-                          let modDate = attrs.contentModificationDate,
-                          modDate >= todayStart else { continue }
-                    tokens += scanJsonlForTodayTokens(file: subFile, todayPrefix: todayPrefix)
-                }
-            }
-        }
-        return tokens
-    }
-
-    /// Recursively scan a directory tree for JSONL files modified today
-    private static func scanDirectoryRecursively(dir: URL, todayStart: Date, todayPrefix: String) -> Int {
+    /// Recursively scan a directory tree for JSONL files modified today.
+    /// Returns 0 silently if `dir` doesn't exist (e.g. user without VM mirror).
+    private static func scanDirectoryRecursively(dir: URL, todayStart: Date, todayPrefix: String, seenUsage: inout Set<String>) -> Int {
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey]) else {
             return 0
@@ -256,18 +243,18 @@ struct StatsReader: Sendable {
         for item in items {
             let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
             if isDir {
-                tokens += scanDirectoryRecursively(dir: item, todayStart: todayStart, todayPrefix: todayPrefix)
+                tokens += scanDirectoryRecursively(dir: item, todayStart: todayStart, todayPrefix: todayPrefix, seenUsage: &seenUsage)
             } else if item.pathExtension == "jsonl" {
                 guard let attrs = try? item.resourceValues(forKeys: [.contentModificationDateKey]),
                       let modDate = attrs.contentModificationDate,
                       modDate >= todayStart else { continue }
-                tokens += scanJsonlForTodayTokens(file: item, todayPrefix: todayPrefix)
+                tokens += scanJsonlForTodayTokens(file: item, todayPrefix: todayPrefix, seenUsage: &seenUsage)
             }
         }
         return tokens
     }
 
-    private static func scanJsonlForTodayTokens(file: URL, todayPrefix: String) -> Int {
+    private static func scanJsonlForTodayTokens(file: URL, todayPrefix: String, seenUsage: inout Set<String>) -> Int {
         guard let data = try? Data(contentsOf: file),
               let content = String(data: data, encoding: .utf8) else { return 0 }
 
@@ -285,6 +272,17 @@ struct StatsReader: Sendable {
                   timestamp.hasPrefix(todayPrefix),
                   let message = obj["message"] as? [String: Any],
                   let usage = message["usage"] as? [String: Any] else { continue }
+
+            // Dédup par message.id (fallback fichier|timestamp) : une réponse
+            // multi-tool-calls recopie le même bloc usage sur N lignes.
+            let key: String
+            if let mid = message["id"] as? String {
+                key = "msg:\(mid)"
+            } else {
+                key = "\(file.path)|\(timestamp)"
+            }
+            if seenUsage.contains(key) { continue }
+            seenUsage.insert(key)
 
             let input = usage["input_tokens"] as? Int ?? 0
             let output = usage["output_tokens"] as? Int ?? 0
