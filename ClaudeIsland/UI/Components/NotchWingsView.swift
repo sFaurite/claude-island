@@ -100,12 +100,13 @@ final class NotchWingsController: ObservableObject {
 // MARK: - Wing Section
 
 enum WingSection: Equatable {
-    case rateLimit5h, rateLimit7j, overage
+    case rateLimitFable, rateLimit5h, rateLimit7j, overage
     case heatmap, tokensAllTime, tokensToday, daily, record
 
     /// Map from element id to WingSection
     static func from(elementId: String) -> WingSection? {
         switch elementId {
+        case "fable":         return .rateLimitFable
         case "5h":            return .rateLimit5h
         case "7j":            return .rateLimit7j
         case "heatmap":       return .heatmap
@@ -122,6 +123,8 @@ enum WingSection: Equatable {
         switch self {
         case .overage:
             return elements.first(where: { $0.id == "5h" })?.side == .left
+        case .rateLimitFable:
+            return elements.first(where: { $0.id == "fable" })?.side == .left
         case .rateLimit5h:
             return elements.first(where: { $0.id == "5h" })?.side == .left
         case .rateLimit7j:
@@ -294,7 +297,7 @@ struct NotchWingsView: View {
         let visibleElements = wingsElements.filter { $0.side == side && $0.visible }
         let hasRateLimits = rateLimits != nil
         let hasStats = stats != nil
-        let needsData = visibleElements.contains { ["5h", "7j"].contains($0.id) } ? hasRateLimits : true
+        let needsData = visibleElements.contains { ["fable", "5h", "7j"].contains($0.id) } ? hasRateLimits : true
         let needsStats = visibleElements.contains { ["heatmap", "tokensAllTime", "tokensToday", "lastDay", "record"].contains($0.id) } ? hasStats : true
 
         if visibleElements.isEmpty || (!needsData && !needsStats) {
@@ -304,7 +307,7 @@ struct NotchWingsView: View {
         } else {
             // Stale warning for rate limits on this side
             if let rl = rateLimits,
-               visibleElements.contains(where: { $0.id == "5h" || $0.id == "7j" }),
+               visibleElements.contains(where: { $0.id == "fable" || $0.id == "5h" || $0.id == "7j" }),
                rl.fetchedAt.timeIntervalSinceNow < -staleThreshold {
                 HStack(spacing: 3) {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -344,6 +347,12 @@ struct NotchWingsView: View {
     @ViewBuilder
     private func wingElementView(for element: WingElement) -> some View {
         switch element.id {
+        case "fable":
+            if let rl = rateLimits, let util = rl.fableUtilization, let reset = rl.fableReset {
+                rateLimitPill(label: "Fable", utilization: util, reset: reset, forceUnit: .days, windowSeconds: 7 * 86400)
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleSection(.rateLimitFable) }
+            }
         case "5h":
             if let rl = rateLimits {
                 rateLimitPill(label: "5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, forceUnit: nil, windowSeconds: 5 * 3600)
@@ -497,6 +506,10 @@ struct NotchWingsView: View {
     @ViewBuilder
     private func detailPanel(for section: WingSection) -> some View {
         switch section {
+        case .rateLimitFable:
+            if let rl = rateLimits, let util = rl.fableUtilization, let reset = rl.fableReset {
+                rateLimitDetail(title: "Current week (Fable)", utilization: util, reset: reset, windowSeconds: 7 * 86400)
+            }
         case .rateLimit5h:
             if let rl = rateLimits {
                 rateLimitDetail(title: "Rate Limit 5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, windowSeconds: 5 * 3600)
@@ -772,18 +785,18 @@ struct NotchWingsView: View {
             Text(label)
                 .font(boldFont)
                 .foregroundColor(.white.opacity(0.5))
+                .fixedSize(horizontal: true, vertical: false) // évite « Fable » → « Fab… »
 
             progressBar(utilization: utilization, expectedUtilization: expectedUtil)
 
+            // Le temps de reset (« 1h », « 4j ») suffit à indiquer le compte à
+            // rebours ; l'icône ↻ était redondante et a été retirée pour gagner de la place.
             (Text("\(Int(utilization * 100))%")
                 .foregroundColor(colorForUtilization(utilization, expected: expectedUtil).opacity(0.9))
             + Text(" \(formatResetTime(reset, forceUnit: forceUnit))")
                 .foregroundColor(.white.opacity(0.4)))
                 .font(smallFont)
-
-            Text("↻")
-                .font(smallFont)
-                .foregroundColor(.white.opacity(0.4))
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 

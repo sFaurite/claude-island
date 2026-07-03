@@ -14,6 +14,10 @@ struct RateLimitData: Sendable, Codable {
     let sevenDayUtilization: Double    // 0.0–1.0
     let sevenDayReset: Date
     let overageUtilization: Double     // 0.0–1.0
+    // Weekly per-model (Fable) limit — from /api/oauth/usage, absent for some plans.
+    // Optionnels : décodage nil quand la clé manque (caches antérieurs compatibles).
+    var fableUtilization: Double?      // 0.0–1.0
+    var fableReset: Date?
     let fetchedAt: Date
 }
 
@@ -94,6 +98,10 @@ actor RateLimitService {
     // MARK: - API Call
 
     private func fetchRateLimits(token: String) async throws -> RateLimitData {
+        // La limite hebdo Fable vient d'un endpoint distinct : on la récupère en
+        // parallèle de l'appel /v1/messages (best-effort, nil si indisponible).
+        async let fableTask = fetchFableWeekly(token: token)
+
         let url = URL(string: "https://api.anthropic.com/v1/messages")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -123,12 +131,57 @@ actor RateLimitService {
             throw RateLimitError.apiError(statusCode: httpResponse.statusCode)
         }
 
-        return parseRateLimitHeaders(httpResponse)
+        let fable = try? await fableTask
+        return parseRateLimitHeaders(httpResponse, fable: fable)
     }
+
+    /// Récupère la limite hebdomadaire propre au modèle Fable via /api/oauth/usage.
+    /// Renvoie nil si l'endpoint échoue ou si aucune limite « weekly_scoped » Fable
+    /// n'est présente (plans sans cette limite) — la pill est alors masquée.
+    private func fetchFableWeekly(token: String) async throws -> (utilization: Double, reset: Date)? {
+        let url = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 10
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let limits = json["limits"] as? [[String: Any]] else {
+            return nil
+        }
+
+        func isFableScoped(_ entry: [String: Any]) -> Bool {
+            guard (entry["kind"] as? String) == "weekly_scoped" else { return false }
+            let model = (entry["scope"] as? [String: Any])?["model"] as? [String: Any]
+            return (model?["display_name"] as? String) == "Fable"
+        }
+
+        // Priorité à l'entrée explicitement Fable, sinon toute limite hebdo scopée.
+        guard let entry = limits.first(where: isFableScoped)
+                ?? limits.first(where: { ($0["kind"] as? String) == "weekly_scoped" }),
+              let percent = (entry["percent"] as? NSNumber)?.doubleValue,
+              let resetStr = entry["resets_at"] as? String,
+              let reset = Self.isoFormatter.date(from: resetStr) else {
+            return nil
+        }
+
+        return (utilization: percent / 100.0, reset: reset)
+    }
+
+    /// Parse les timestamps ISO-8601 avec fraction de seconde (ex. « 2026-07-07T06:00:00.283853+00:00 »).
+    private static let isoFormatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
 
     // MARK: - Header Parsing
 
-    private func parseRateLimitHeaders(_ response: HTTPURLResponse) -> RateLimitData {
+    private func parseRateLimitHeaders(_ response: HTTPURLResponse, fable: (utilization: Double, reset: Date)?) -> RateLimitData {
         let fiveHourUtil = parseDouble(response.value(forHTTPHeaderField: "anthropic-ratelimit-unified-5h-utilization"))
         let fiveHourReset = parseTimestamp(response.value(forHTTPHeaderField: "anthropic-ratelimit-unified-5h-reset"))
         let sevenDayUtil = parseDouble(response.value(forHTTPHeaderField: "anthropic-ratelimit-unified-7d-utilization"))
@@ -141,6 +194,8 @@ actor RateLimitService {
             sevenDayUtilization: sevenDayUtil,
             sevenDayReset: sevenDayReset,
             overageUtilization: overageUtil,
+            fableUtilization: fable?.utilization,
+            fableReset: fable?.reset,
             fetchedAt: Date()
         )
     }

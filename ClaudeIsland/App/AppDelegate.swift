@@ -46,6 +46,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         HookInstaller.installIfNeeded()
         NSApplication.shared.setActivationPolicy(.accessory)
 
+        // Applique les migrations de config au démarrage (ex. injection de la barre
+        // « fable »). NotchWingsView lit wingsElements directement depuis UserDefaults,
+        // donc la migration doit être persistée avant le premier rendu des ailes.
+        _ = AppSettings.wingsElements
+
         windowManager = WindowManager()
         _ = windowManager?.setupNotchWindow()
 

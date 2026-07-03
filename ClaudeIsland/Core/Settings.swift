@@ -130,13 +130,14 @@ enum WingSide: String, Codable {
 }
 
 struct WingElement: Codable, Identifiable, Equatable {
-    let id: String        // "5h", "7j", "heatmap", "tokensAllTime", "tokensToday", "lastDay", "record"
+    let id: String        // "fable", "5h", "7j", "heatmap", "tokensAllTime", "tokensToday", "lastDay", "record"
     var side: WingSide    // .left or .right
     var visible: Bool     // toggle on/off
 
     /// Display label for the element chip
     var label: String {
         switch id {
+        case "fable":         return "Fable"
         case "5h":            return "5h"
         case "7j":            return "7j"
         case "heatmap":       return "Heatmap"
@@ -149,6 +150,7 @@ struct WingElement: Codable, Identifiable, Equatable {
     }
 
     static let defaultElements: [WingElement] = [
+        WingElement(id: "fable",         side: .left,  visible: true),
         WingElement(id: "5h",            side: .left,  visible: true),
         WingElement(id: "7j",            side: .left,  visible: true),
         WingElement(id: "heatmap",       side: .right, visible: true),
@@ -412,6 +414,19 @@ enum AppSettings {
                         defaults.set(data, forKey: Keys.wingsElements)
                     }
                 }
+                // Migrate: inject "fable" (limite hebdo Fable) juste avant "5h"
+                if !elements.contains(where: { $0.id == "fable" }) {
+                    let fiveH = elements.first(where: { $0.id == "5h" })
+                    let fable = WingElement(id: "fable", side: fiveH?.side ?? .left, visible: true)
+                    if let anchor = elements.firstIndex(where: { $0.id == "5h" }) {
+                        elements.insert(fable, at: anchor)
+                    } else {
+                        elements.insert(fable, at: 0)
+                    }
+                    if let data = try? JSONEncoder().encode(elements) {
+                        defaults.set(data, forKey: Keys.wingsElements)
+                    }
+                }
                 return elements
             }
             // Migration: build from legacy booleans
@@ -433,6 +448,7 @@ enum AppSettings {
 
         let tokensVisible = legacyBool(Keys.wingsShowTokens)
         let elements: [WingElement] = [
+            WingElement(id: "fable",         side: .left,  visible: true),
             WingElement(id: "5h",            side: .left,  visible: legacyBool(Keys.wingsShow5h)),
             WingElement(id: "7j",            side: .left,  visible: legacyBool(Keys.wingsShow7j)),
             WingElement(id: "heatmap",       side: .right, visible: legacyBool(Keys.wingsShowHeatmap)),
