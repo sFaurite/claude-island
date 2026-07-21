@@ -28,11 +28,25 @@ actor RateLimitService {
     /// Cache token OAuth en mémoire (évite la lecture keychain à chaque refresh)
     private var cachedToken: String?
 
+    /// Dernière valeur Fable connue — réutilisée quand /api/oauth/usage échoue
+    /// transitoirement (429, 5xx, timeout), pour éviter que la pill disparaisse.
+    private var lastFable: (utilization: Double, reset: Date, fetchedAt: Date)?
+
+    /// Durée max de réutilisation d'une valeur Fable en cas d'échecs répétés.
+    /// Au-delà, la pill se masque (comportement des plans sans limite Fable).
+    private static let fableStaleTTL: TimeInterval = 2 * 3600
+
     /// Chemin du cache disque
     static let cacheURL: URL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".claude/rate-limit-cache.json")
 
-    private init() {}
+    private init() {
+        if let cached = Self.loadFromDisk(),
+           let utilization = cached.fableUtilization,
+           let reset = cached.fableReset {
+            lastFable = (utilization, reset, cached.fetchedAt)
+        }
+    }
 
     func fetch() async throws -> RateLimitData {
         let token: String
@@ -131,13 +145,37 @@ actor RateLimitService {
             throw RateLimitError.apiError(statusCode: httpResponse.statusCode)
         }
 
-        let fable = try? await fableTask
+        let fable: (utilization: Double, reset: Date)?
+        do {
+            // nil ici = l'endpoint a répondu mais le plan n'a pas de limite Fable
+            // → on oublie aussi la dernière valeur (masquage légitime de la pill).
+            fable = try await fableTask
+            lastFable = fable.map { ($0.utilization, $0.reset, Date()) }
+        } catch {
+            // Échec transitoire (429, 5xx, timeout…) : on réutilise la dernière
+            // valeur connue tant qu'elle est fraîche, au lieu de masquer la pill.
+            let fallback = freshLastFable()
+            Self.logger.warning("Fable weekly fetch failed: \(error.localizedDescription) — \(fallback != nil ? "reusing last known value" : "no fresh fallback, pill hidden")")
+            fable = fallback
+        }
         return parseRateLimitHeaders(httpResponse, fable: fable)
     }
 
+    /// Dernière valeur Fable connue, si encore exploitable : pas plus vieille que
+    /// fableStaleTTL et dont la fenêtre n'est pas déjà réinitialisée.
+    private func freshLastFable() -> (utilization: Double, reset: Date)? {
+        guard let last = lastFable,
+              Date().timeIntervalSince(last.fetchedAt) < Self.fableStaleTTL,
+              last.reset > Date() else {
+            return nil
+        }
+        return (last.utilization, last.reset)
+    }
+
     /// Récupère la limite hebdomadaire propre au modèle Fable via /api/oauth/usage.
-    /// Renvoie nil si l'endpoint échoue ou si aucune limite « weekly_scoped » Fable
-    /// n'est présente (plans sans cette limite) — la pill est alors masquée.
+    /// Renvoie nil uniquement quand l'endpoint répond sans limite « weekly_scoped »
+    /// Fable (plans sans cette limite) ; lève une erreur sur tout échec transitoire
+    /// (statut ≠ 200, payload invalide, erreur réseau).
     private func fetchFableWeekly(token: String) async throws -> (utilization: Double, reset: Date)? {
         let url = URL(string: "https://api.anthropic.com/api/oauth/usage")!
         var request = URLRequest(url: url)
@@ -148,10 +186,16 @@ actor RateLimitService {
         request.timeoutInterval = 10
 
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let http = response as? HTTPURLResponse else {
+            throw RateLimitError.invalidResponse
+        }
+        guard http.statusCode == 200 else {
+            if http.statusCode == 401 { throw RateLimitError.unauthorized }
+            throw RateLimitError.apiError(statusCode: http.statusCode)
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let limits = json["limits"] as? [[String: Any]] else {
-            return nil
+            throw RateLimitError.invalidResponse
         }
 
         func isFableScoped(_ entry: [String: Any]) -> Bool {
@@ -162,11 +206,27 @@ actor RateLimitService {
 
         // Priorité à l'entrée explicitement Fable, sinon toute limite hebdo scopée.
         guard let entry = limits.first(where: isFableScoped)
-                ?? limits.first(where: { ($0["kind"] as? String) == "weekly_scoped" }),
-              let percent = (entry["percent"] as? NSNumber)?.doubleValue,
-              let resetStr = entry["resets_at"] as? String,
-              let reset = Self.isoFormatter.date(from: resetStr) else {
+                ?? limits.first(where: { ($0["kind"] as? String) == "weekly_scoped" }) else {
+            // Réponse valide mais aucune limite hebdo scopée : plan sans limite Fable.
             return nil
+        }
+        guard let percent = (entry["percent"] as? NSNumber)?.doubleValue else {
+            throw RateLimitError.invalidResponse
+        }
+
+        // `resets_at` est nul tant qu'aucune activité n'a ancré la fenêtre hebdo
+        // Fable (semaine encore vierge). La fenêtre Fable étant calée sur la
+        // fenêtre hebdo générale, on retombe alors sur son reset (seven_day),
+        // ce qui permet d'afficher la pill à 0 % dès le début de semaine.
+        let reset: Date
+        if let resetStr = entry["resets_at"] as? String,
+           let parsed = Self.isoFormatter.date(from: resetStr) {
+            reset = parsed
+        } else if let weeklyStr = (json["seven_day"] as? [String: Any])?["resets_at"] as? String,
+                  let weeklyReset = Self.isoFormatter.date(from: weeklyStr) {
+            reset = weeklyReset
+        } else {
+            throw RateLimitError.invalidResponse
         }
 
         return (utilization: percent / 100.0, reset: reset)
