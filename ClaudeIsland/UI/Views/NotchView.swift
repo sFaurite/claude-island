@@ -41,6 +41,7 @@ struct NotchView: View {
     @State private var isHovering: Bool = false
     @State private var isBouncing: Bool = false
     @AppStorage("showWingsInFullscreen") private var showWingsInFullscreen: Bool = true
+    @AppStorage("expandNotchForActivity") private var expandNotchForActivity: Bool = false
 
     @Namespace private var activityNamespace
 
@@ -281,8 +282,11 @@ struct NotchView: View {
     }
 
     /// Whether to show the expanded closed state (processing, pending permission, or waiting for input)
+    /// When `expandNotchForActivity` is disabled, the pill keeps a fixed width and shows no side
+    /// indicators, so it never shifts the fullscreen wings on its own.
     private var showClosedActivity: Bool {
-        isProcessing || hasPendingPermission || hasWaitingForInput
+        guard expandNotchForActivity else { return false }
+        return isProcessing || hasPendingPermission || hasWaitingForInput
     }
 
     @ViewBuilder

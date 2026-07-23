@@ -201,6 +201,7 @@ enum AppSettings {
         static let showTotalSessionCount = "showTotalSessionCount"
         static let showActiveSessionCount = "showActiveSessionCount"
         static let autoOpenNotch = "autoOpenNotch"
+        static let expandNotchForActivity = "expandNotchForActivity"
         static let maxNotificationVolume = "maxNotificationVolume"
         static let showWingsInFullscreen = "showWingsInFullscreen"
         static let wingsFontSize = "wingsFontSize"
@@ -333,13 +334,28 @@ enum AppSettings {
 
     /// Whether the notch opens automatically (on hover and on session notifications).
     /// When false, the notch only opens via explicit user actions (click, hotkey).
+    /// Defaults to false so the notch never opens on its own unless the user opts in.
     static var autoOpenNotch: Bool {
         get {
-            if defaults.object(forKey: Keys.autoOpenNotch) == nil { return true }
+            if defaults.object(forKey: Keys.autoOpenNotch) == nil { return false }
             return defaults.bool(forKey: Keys.autoOpenNotch)
         }
         set {
             defaults.set(newValue, forKey: Keys.autoOpenNotch)
+        }
+    }
+
+    /// Whether the closed notch pill expands sideways to show live activity
+    /// (processing / pending permission / ready-for-input indicators).
+    /// When false, the pill keeps a fixed width and never shifts the fullscreen wings.
+    /// Defaults to false so the width only changes when the user clicks to open it.
+    static var expandNotchForActivity: Bool {
+        get {
+            if defaults.object(forKey: Keys.expandNotchForActivity) == nil { return false }
+            return defaults.bool(forKey: Keys.expandNotchForActivity)
+        }
+        set {
+            defaults.set(newValue, forKey: Keys.expandNotchForActivity)
         }
     }
 
