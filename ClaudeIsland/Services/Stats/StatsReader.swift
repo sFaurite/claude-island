@@ -198,8 +198,11 @@ struct StatsReader: Sendable {
     ///   1. Scan récursif complet — attrape aussi les transcripts subagents
     ///      (<session>/subagents/) ET workflows (subagents/workflows/wf_*/),
     ///      qu'un scan à profondeur fixe ratait (~1M tokens/jour workflow).
-    ///   2. Dédup des blocs usage par message.id — une réponse multi-tool-calls
-    ///      recopie le même bloc usage sur N lignes JSONL.
+    ///   2. Dédup des blocs usage par message.id en gardant l'usage FINAL :
+    ///      une réponse est écrite sur N lignes (tool-calls parallèles à usage
+    ///      identique, ou blocs streamés dont output_tokens croît ligne à ligne).
+    ///      On compte input/cache une seule fois puis seulement le delta d'output
+    ///      révélé ensuite — « garder la 1re ligne » figeait l'output partiel.
     ///   3. Jour identifié en UTC (comme toISOString côté .mjs) : les timestamps
     ///      JSONL sont en UTC, on compare donc un préfixe UTC.
     private static func readTodayLiveTokens() -> Int {
@@ -212,7 +215,8 @@ struct StatsReader: Sendable {
         let todayPrefix = utcDateFormatter.string(from: Date()) // "yyyy-MM-dd" UTC
 
         // Dédup globale des blocs usage par message.id, partagée sur tout le scan.
-        var seenUsage = Set<String>()
+        // Valeur = output_tokens déjà comptabilisé pour la clé (cf. usage FINAL).
+        var seenUsage = [String: Int]()
         var totalTokens = 0
 
         // ── CLI sessions: scan récursif multi-racines (local Mac + miroir VM) ──
@@ -234,7 +238,7 @@ struct StatsReader: Sendable {
 
     /// Recursively scan a directory tree for JSONL files modified today.
     /// Returns 0 silently if `dir` doesn't exist (e.g. user without VM mirror).
-    private static func scanDirectoryRecursively(dir: URL, todayStart: Date, todayPrefix: String, seenUsage: inout Set<String>) -> Int {
+    private static func scanDirectoryRecursively(dir: URL, todayStart: Date, todayPrefix: String, seenUsage: inout [String: Int]) -> Int {
         let fm = FileManager.default
         guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey]) else {
             return 0
@@ -254,7 +258,7 @@ struct StatsReader: Sendable {
         return tokens
     }
 
-    private static func scanJsonlForTodayTokens(file: URL, todayPrefix: String, seenUsage: inout Set<String>) -> Int {
+    private static func scanJsonlForTodayTokens(file: URL, todayPrefix: String, seenUsage: inout [String: Int]) -> Int {
         guard let data = try? Data(contentsOf: file),
               let content = String(data: data, encoding: .utf8) else { return 0 }
 
@@ -273,20 +277,28 @@ struct StatsReader: Sendable {
                   let message = obj["message"] as? [String: Any],
                   let usage = message["usage"] as? [String: Any] else { continue }
 
-            // Dédup par message.id (fallback fichier|timestamp) : une réponse
-            // multi-tool-calls recopie le même bloc usage sur N lignes.
+            // Dédup par message.id (fallback fichier|timestamp) en gardant l'usage
+            // FINAL : une réponse est écrite sur N lignes (tool-calls parallèles à
+            // usage identique, ou blocs streamés dont output_tokens croît). On
+            // compte input une fois puis seulement le delta d'output révélé ensuite.
             let key: String
             if let mid = message["id"] as? String {
                 key = "msg:\(mid)"
             } else {
                 key = "\(file.path)|\(timestamp)"
             }
-            if seenUsage.contains(key) { continue }
-            seenUsage.insert(key)
-
-            let input = usage["input_tokens"] as? Int ?? 0
             let output = usage["output_tokens"] as? Int ?? 0
-            tokens += input + output
+            if let prevOut = seenUsage[key] {
+                // Doublon strict ou état antérieur du streaming : ajouter le delta.
+                if output > prevOut {
+                    tokens += output - prevOut
+                    seenUsage[key] = output
+                }
+            } else {
+                let input = usage["input_tokens"] as? Int ?? 0
+                tokens += input + output
+                seenUsage[key] = output
+            }
         }
 
         return tokens

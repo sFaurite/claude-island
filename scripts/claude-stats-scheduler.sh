@@ -38,6 +38,20 @@ trap 'rm -f "$LOCKFILE"' EXIT
 if [ -z "$NODE" ]; then log "ERREUR - node introuvable"; exit 1; fi
 if [ ! -f "$REFRESH_SCRIPT" ]; then log "ERREUR - $REFRESH_SCRIPT introuvable"; exit 1; fi
 
+# ── Archive additive du miroir VM ───────────────────────────────────
+# Le miroir Mutagen (~/.claude-island/projects) propage les purges de la VM
+# (cleanupPeriodDays) : sans archive, le total all-time baisse à chaque purge.
+# Copie sans suppression vers ~/.claude-island/archive, que le refresh scanne
+# à la place du miroir.
+MIRROR_DIR="$HOME/.claude-island/projects"
+ARCHIVE_DIR="$HOME/.claude-island/archive"
+if [ -d "$MIRROR_DIR" ]; then
+    mkdir -p "$ARCHIVE_DIR"
+    if ! rsync -a "$MIRROR_DIR/" "$ARCHIVE_DIR/" 2>>"$LOGFILE"; then
+        log "WARN - rsync archive miroir en échec (le refresh scanne l'archive telle quelle)"
+    fi
+fi
+
 # ── Refresh ─────────────────────────────────────────────────────────
 if OUTPUT=$("$NODE" "$REFRESH_SCRIPT" 2>&1); then
     log "OK - $OUTPUT"
