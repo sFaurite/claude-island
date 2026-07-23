@@ -458,6 +458,9 @@ struct NotchWingsView: View {
                 }
             }
 
+            Text("Reset le \(formatExactResetDateTime(reset))")
+                .font(smallFont).foregroundColor(.white.opacity(0.4))
+
             if isOverExpected {
                 Text("▲ +\(Int((utilization - expectedUtil) * 100))% au-dessus de l'attendu")
                     .font(smallFont).foregroundColor(TerminalColors.red.opacity(0.8))
@@ -915,6 +918,13 @@ struct NotchWingsView: View {
             return "\(hours)h \(minutes)m"
         }
         return "\(max(1, minutes))m"
+    }
+
+    private func formatExactResetDateTime(_ date: Date) -> String {
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "fr_FR")
+        df.dateFormat = "EEE dd/MM 'à' HH:mm"
+        return df.string(from: date)
     }
 
     private func formatElapsed(since date: Date) -> String {
