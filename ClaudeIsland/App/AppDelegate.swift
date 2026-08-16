@@ -8,6 +8,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowManager: WindowManager?
     private var screenObserver: ScreenObserver?
     private var updateCheckTimer: Timer?
+    private var rateLimitRefreshTimer: Timer?
+    private var rateLimitActivity: NSObjectProtocol?
 
     static var shared: AppDelegate?
     let updater: SPUUpdater
@@ -77,6 +79,31 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             guard let updater = self?.updater, updater.canCheckForUpdates else { return }
             updater.checkForUpdates()
         }
+
+        startRateLimitBackgroundRefresh()
+    }
+
+    /// Relevé de quota en tâche de fond, indépendant de l'affichage des ailes.
+    /// Sans lui, ~/.claude/rate-limit-cache.json n'était réécrit que lorsque la
+    /// barre de menus est masquée (mode plein écran) : hors plein écran, les
+    /// consommateurs du cache (MonA) lisaient des valeurs figées pendant des heures.
+    private func startRateLimitBackgroundRefresh() {
+        // Même parade anti-App Nap que NotchWingsController : sans activité
+        // déclarée, les timers d'une app LSUIElement sont coalescés indéfiniment.
+        if rateLimitActivity == nil {
+            rateLimitActivity = Foundation.ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiatedAllowingIdleSystemSleep],
+                reason: "Background rate-limit cache refresh"
+            )
+        }
+
+        Task { _ = try? await RateLimitService.shared.fetch() }
+        rateLimitRefreshTimer?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: 600, repeats: true) { _ in
+            Task { _ = try? await RateLimitService.shared.fetch() }
+        }
+        timer.tolerance = 60
+        rateLimitRefreshTimer = timer
     }
 
     private func handleScreenChange() {
@@ -86,6 +113,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         GlobalHotkeyManager.shared.unregisterAll()
         updateCheckTimer?.invalidate()
+        rateLimitRefreshTimer?.invalidate()
+        if let rateLimitActivity {
+            Foundation.ProcessInfo.processInfo.endActivity(rateLimitActivity)
+            self.rateLimitActivity = nil
+        }
         screenObserver = nil
     }
 
