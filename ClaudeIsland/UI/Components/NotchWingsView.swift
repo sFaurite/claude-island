@@ -430,26 +430,38 @@ struct NotchWingsView: View {
         let timeRemaining = max(0, reset.timeIntervalSinceNow)
         let elapsed = windowSeconds - timeRemaining
         let expectedUtil = min(1.0, max(0, elapsed / windowSeconds))
+        // Fenêtres hebdo : second attendu qui ne compte que le temps utile
+        // (hors samedi/dimanche). Il est ≥ l'attendu linéaire en semaine, plafonne
+        // le week-end et rejoint l'attendu linéaire au reset.
+        let weekdayUtil = weekdayExpectedUtilization(reset: reset, windowSeconds: windowSeconds)
         let isOverExpected = utilization > expectedUtil
+        let isOverWeekday = utilization > (weekdayUtil ?? expectedUtil)
 
         return VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: fontSize, weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.7))
 
-            progressBar(utilization: utilization, expectedUtilization: expectedUtil, barWidth: 180, barHeight: 5)
+            progressBar(utilization: utilization, expectedUtilization: expectedUtil, secondaryExpected: weekdayUtil, barWidth: 180, barHeight: 5)
 
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Utilisé").font(smallFont).foregroundColor(.white.opacity(0.4))
                     Text("\(Int(utilization * 100))%")
                         .font(boldFont)
-                        .foregroundColor(colorForUtilization(utilization, expected: expectedUtil))
+                        .foregroundColor(paceColor(utilization, expected: expectedUtil, weekday: weekdayUtil))
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Attendu").font(smallFont).foregroundColor(.white.opacity(0.4))
                     Text("\(Int(expectedUtil * 100))%")
-                        .font(boldFont).foregroundColor(.white.opacity(0.6))
+                        .font(boldFont).foregroundColor(TerminalColors.amber.opacity(0.8))
+                }
+                if let weekdayUtil {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Hors WE").font(smallFont).foregroundColor(.white.opacity(0.4))
+                        Text("\(Int(weekdayUtil * 100))%")
+                            .font(boldFont).foregroundColor(TerminalColors.orange.opacity(0.9))
+                    }
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Reset").font(smallFont).foregroundColor(.white.opacity(0.4))
@@ -461,7 +473,13 @@ struct NotchWingsView: View {
             Text("Reset le \(formatExactResetDateTime(reset))")
                 .font(smallFont).foregroundColor(.white.opacity(0.4))
 
-            if isOverExpected {
+            if let weekdayUtil, isOverWeekday {
+                Text("▲ +\(Int((utilization - weekdayUtil) * 100))% au-dessus de l'attendu hors week-end")
+                    .font(smallFont).foregroundColor(TerminalColors.red.opacity(0.8))
+            } else if weekdayUtil != nil, isOverExpected {
+                Text("◆ +\(Int((utilization - expectedUtil) * 100))% vs linéaire, dans la marge hors week-end")
+                    .font(smallFont).foregroundColor(TerminalColors.orange.opacity(0.9))
+            } else if isOverExpected {
                 Text("▲ +\(Int((utilization - expectedUtil) * 100))% au-dessus de l'attendu")
                     .font(smallFont).foregroundColor(TerminalColors.red.opacity(0.8))
             } else {
@@ -783,6 +801,8 @@ struct NotchWingsView: View {
         let timeRemaining = max(0, reset.timeIntervalSinceNow)
         let elapsed = windowSeconds - timeRemaining
         let expectedUtil = min(1.0, max(0, elapsed / windowSeconds))
+        // Fenêtres hebdo : même lecture que le panel de détail (attendu hors week-end)
+        let weekdayUtil = weekdayExpectedUtilization(reset: reset, windowSeconds: windowSeconds)
 
         return HStack(spacing: 4) {
             Text(label)
@@ -790,12 +810,12 @@ struct NotchWingsView: View {
                 .foregroundColor(.white.opacity(0.5))
                 .fixedSize(horizontal: true, vertical: false) // évite « Fable » → « Fab… »
 
-            progressBar(utilization: utilization, expectedUtilization: expectedUtil)
+            progressBar(utilization: utilization, expectedUtilization: expectedUtil, secondaryExpected: weekdayUtil)
 
             // Le temps de reset (« 1h », « 4j ») suffit à indiquer le compte à
             // rebours ; l'icône ↻ était redondante et a été retirée pour gagner de la place.
             (Text("\(Int(utilization * 100))%")
-                .foregroundColor(colorForUtilization(utilization, expected: expectedUtil).opacity(0.9))
+                .foregroundColor(paceColor(utilization, expected: expectedUtil, weekday: weekdayUtil).opacity(0.9))
             + Text(" \(formatResetTime(reset, forceUnit: forceUnit))")
                 .foregroundColor(.white.opacity(0.4)))
                 .font(smallFont)
@@ -817,12 +837,18 @@ struct NotchWingsView: View {
 
     // MARK: - Progress Bar
 
-    private func progressBar(utilization: Double, expectedUtilization: Double, barWidth: CGFloat = 40, barHeight: CGFloat = 3) -> some View {
+    /// Barre de progression. `expectedUtilization` = attendu linéaire (repère ambre).
+    /// `secondaryExpected` (fenêtres hebdo) = attendu hors week-end (repère orange) :
+    /// vert jusqu'au plus bas des deux repères, orange entre les deux, rouge au-delà
+    /// du plus haut. Sans second repère, le comportement d'origine est conservé.
+    private func progressBar(utilization: Double, expectedUtilization: Double, secondaryExpected: Double? = nil, barWidth: CGFloat = 40, barHeight: CGFloat = 3) -> some View {
         GeometryReader { geo in
             let w = geo.size.width
             let actual = min(utilization, 1.0)
             let expected = min(expectedUtilization, 1.0)
-            let isOver = actual > expected
+            let secondary = secondaryExpected.map { min($0, 1.0) }
+            let low = min(expected, secondary ?? expected)
+            let high = max(expected, secondary ?? expected)
 
             ZStack(alignment: .leading) {
                 // Background
@@ -830,40 +856,84 @@ struct NotchWingsView: View {
                     .fill(.white.opacity(0.15))
                     .frame(height: barHeight)
 
-                if isOver {
-                    // Green portion up to expected
-                    Capsule()
+                // Remplissage par zones, découpé en capsule
+                HStack(spacing: 0) {
+                    Rectangle()
                         .fill(TerminalColors.green)
-                        .frame(width: max(1, w * expected), height: barHeight)
-
-                    // Red overshoot from expected to actual
-                    Capsule()
-                        .fill(TerminalColors.red)
-                        .frame(width: max(1, w * actual), height: barHeight)
-                        .mask(
-                            HStack(spacing: 0) {
-                                Color.clear.frame(width: w * expected)
-                                Color.white
-                            }
-                        )
-                } else {
-                    // All green — under expected
-                    Capsule()
-                        .fill(TerminalColors.green)
-                        .frame(width: max(1, w * actual), height: barHeight)
+                        .frame(width: max(1, w * min(actual, low)))
+                    if actual > low {
+                        Rectangle()
+                            .fill(TerminalColors.orange)
+                            .frame(width: w * (min(actual, high) - low))
+                    }
+                    if actual > high {
+                        Rectangle()
+                            .fill(TerminalColors.red)
+                            .frame(width: w * (actual - high))
+                    }
                 }
+                .frame(height: barHeight)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .clipShape(Capsule())
 
-                // Amber marker line at expected position
+                // Repère ambre : attendu linéaire
                 RoundedRectangle(cornerRadius: 0.5)
                     .fill(TerminalColors.amber)
                     .frame(width: 1, height: barHeight + 2)
                     .offset(x: w * expected - 0.5)
+
+                // Repère orange : attendu hors week-end
+                if let secondary {
+                    RoundedRectangle(cornerRadius: 0.5)
+                        .fill(TerminalColors.orange)
+                        .frame(width: 1, height: barHeight + 2)
+                        .offset(x: w * secondary - 0.5)
+                }
             }
         }
         .frame(width: barWidth, height: barHeight + 2)
     }
 
+    // MARK: - Attendu hors week-end
+
+    /// Part du temps utile (hors samedi/dimanche, calendrier local) écoulé dans la
+    /// fenêtre `[reset − windowSeconds, reset]`. Nil hors fenêtres hebdomadaires.
+    private func weekdayExpectedUtilization(reset: Date, windowSeconds: TimeInterval, now: Date = Date()) -> Double? {
+        guard windowSeconds >= 6 * 86400 else { return nil }
+        let start = reset.addingTimeInterval(-windowSeconds)
+        let total = Self.workingSeconds(from: start, to: reset)
+        guard total > 0 else { return nil }
+        let elapsed = Self.workingSeconds(from: start, to: min(max(now, start), reset))
+        return min(1.0, max(0, elapsed / total))
+    }
+
+    /// Secondes hors week-end entre deux dates, en découpant jour par jour.
+    static func workingSeconds(from start: Date, to end: Date, calendar: Calendar = .current) -> TimeInterval {
+        guard end > start else { return 0 }
+        var total: TimeInterval = 0
+        var cursor = start
+        while cursor < end {
+            let dayStart = calendar.startOfDay(for: cursor)
+            guard let nextDay = calendar.date(byAdding: .day, value: 1, to: dayStart) else { break }
+            let segmentEnd = min(nextDay, end)
+            if !calendar.isDateInWeekend(cursor) {
+                total += segmentEnd.timeIntervalSince(cursor)
+            }
+            cursor = segmentEnd
+        }
+        return total
+    }
+
     // MARK: - Helpers
+
+    /// Couleur du rythme : rouge au-delà de l'attendu hors week-end (ou de
+    /// l'attendu linéaire s'il n'y en a pas), orange entre les deux attendus,
+    /// sinon la couleur par niveau d'utilisation.
+    private func paceColor(_ util: Double, expected: Double, weekday: Double?) -> Color {
+        if util > (weekday ?? expected) { return TerminalColors.red }
+        if util > expected { return TerminalColors.orange }
+        return colorForUtilization(util)
+    }
 
     private func colorForUtilization(_ util: Double, expected: Double? = nil) -> Color {
         if let exp = expected, util > exp {
