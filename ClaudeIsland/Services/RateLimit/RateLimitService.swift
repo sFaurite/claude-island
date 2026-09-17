@@ -2,7 +2,7 @@
 //  RateLimitService.swift
 //  ClaudeIsland
 //
-//  Fetches Anthropic API rate limit utilization via a minimal API call
+//  Fetches Anthropic rate limit utilization from /api/oauth/usage (single GET)
 //
 
 import Foundation
@@ -28,27 +28,49 @@ actor RateLimitService {
     /// Cache token OAuth en mémoire (évite la lecture keychain à chaque refresh)
     private var cachedToken: String?
 
-    /// Dernière valeur Fable connue — réutilisée quand /api/oauth/usage échoue
-    /// transitoirement (429, 5xx, timeout), pour éviter que la pill disparaisse.
-    private var lastFable: (utilization: Double, reset: Date, fetchedAt: Date)?
-
-    /// Durée max de réutilisation d'une valeur Fable en cas d'échecs répétés.
-    /// Au-delà, la pill se masque (comportement des plans sans limite Fable).
-    private static let fableStaleTTL: TimeInterval = 2 * 3600
-
     /// Chemin du cache disque
     static let cacheURL: URL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".claude/rate-limit-cache.json")
 
-    private init() {
-        if let cached = Self.loadFromDisk(),
-           let utilization = cached.fableUtilization,
-           let reset = cached.fableReset {
-            lastFable = (utilization, reset, cached.fetchedAt)
-        }
-    }
+    /// Relevé en cours : les appels concurrents (ex. AppDelegate + ailes au
+    /// démarrage) partagent la même requête au lieu d'en lancer deux.
+    private var inFlight: Task<RateLimitData, Error>?
+
+    /// Dernier relevé réussi, resservi tel quel pendant `minInterval` : deux timers
+    /// (ailes 120 s + fond 600 s) ne peuvent ainsi pas dépasser ~15 requêtes/h.
+    /// /api/oauth/usage répond 429 au-delà d'une cadence assez basse (mesuré le
+    /// 17/09/2026 : ~22 % de refus à une requête toutes les 2 min, puis plusieurs
+    /// minutes de 429 continus après une rafale).
+    private var lastSuccess: RateLimitData?
+    private static let minInterval: TimeInterval = 240
+
+    /// Après un 429, pas de nouvelle tentative avant ce délai.
+    private var cooldownUntil: Date?
+    private static let cooldown: TimeInterval = 300
+
+    private init() {}
 
     func fetch() async throws -> RateLimitData {
+        if let last = lastSuccess, Date().timeIntervalSince(last.fetchedAt) < Self.minInterval {
+            return last
+        }
+        if let until = cooldownUntil {
+            if Date() < until {
+                if let last = lastSuccess { return last }
+                throw RateLimitError.apiError(statusCode: 429)
+            }
+            cooldownUntil = nil
+        }
+        if let inFlight {
+            return try await inFlight.value
+        }
+        let task = Task { try await self.performFetch() }
+        inFlight = task
+        defer { inFlight = nil }
+        return try await task.value
+    }
+
+    private func performFetch() async throws -> RateLimitData {
         let token: String
         if let cached = cachedToken {
             token = cached
@@ -59,6 +81,7 @@ actor RateLimitService {
 
         do {
             let data = try await fetchRateLimits(token: token)
+            lastSuccess = data
             saveToDisk(data)
             return data
         } catch RateLimitError.unauthorized {
@@ -67,8 +90,13 @@ actor RateLimitService {
             let freshToken = try await readOAuthToken()
             cachedToken = freshToken
             let data = try await fetchRateLimits(token: freshToken)
+            lastSuccess = data
             saveToDisk(data)
             return data
+        } catch RateLimitError.apiError(let code) where code == 429 {
+            cooldownUntil = Date().addingTimeInterval(Self.cooldown)
+            Self.logger.warning("HTTP 429 on /api/oauth/usage — cooldown \(Int(Self.cooldown)) s")
+            throw RateLimitError.apiError(statusCode: code)
         }
     }
 
@@ -111,72 +139,14 @@ actor RateLimitService {
 
     // MARK: - API Call
 
+    /// Une seule requête GET /api/oauth/usage fournit tout : fenêtres 5 h et 7 j
+    /// (`five_hour`, `seven_day`), dépassement (`extra_usage`) et limite hebdo
+    /// Fable (`limits[kind == weekly_scoped]`).
+    ///
+    /// Jusqu'au 17/09/2026, les fenêtres 5 h / 7 j étaient lues dans les en-têtes
+    /// d'un POST /v1/messages vers Haiku (max_tokens: 1) toutes les 2 minutes :
+    /// un vrai message facturé et comptabilisé dans les quotas, pour rien.
     private func fetchRateLimits(token: String) async throws -> RateLimitData {
-        // La limite hebdo Fable vient d'un endpoint distinct : on la récupère en
-        // parallèle de l'appel /v1/messages (best-effort, nil si indisponible).
-        async let fableTask = fetchFableWeekly(token: token)
-
-        let url = URL(string: "https://api.anthropic.com/v1/messages")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 10
-
-        let body: [String: Any] = [
-            "model": "claude-haiku-4-5-20251001",
-            "max_tokens": 1,
-            "messages": [["role": "user", "content": "hi"]]
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (_, response) = try await URLSession.shared.data(for: request)
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw RateLimitError.invalidResponse
-        }
-
-        guard httpResponse.statusCode == 200 else {
-            if httpResponse.statusCode == 401 {
-                throw RateLimitError.unauthorized
-            }
-            throw RateLimitError.apiError(statusCode: httpResponse.statusCode)
-        }
-
-        let fable: (utilization: Double, reset: Date)?
-        do {
-            // nil ici = l'endpoint a répondu mais le plan n'a pas de limite Fable
-            // → on oublie aussi la dernière valeur (masquage légitime de la pill).
-            fable = try await fableTask
-            lastFable = fable.map { ($0.utilization, $0.reset, Date()) }
-        } catch {
-            // Échec transitoire (429, 5xx, timeout…) : on réutilise la dernière
-            // valeur connue tant qu'elle est fraîche, au lieu de masquer la pill.
-            let fallback = freshLastFable()
-            Self.logger.warning("Fable weekly fetch failed: \(error.localizedDescription) — \(fallback != nil ? "reusing last known value" : "no fresh fallback, pill hidden")")
-            fable = fallback
-        }
-        return parseRateLimitHeaders(httpResponse, fable: fable)
-    }
-
-    /// Dernière valeur Fable connue, si encore exploitable : pas plus vieille que
-    /// fableStaleTTL et dont la fenêtre n'est pas déjà réinitialisée.
-    private func freshLastFable() -> (utilization: Double, reset: Date)? {
-        guard let last = lastFable,
-              Date().timeIntervalSince(last.fetchedAt) < Self.fableStaleTTL,
-              last.reset > Date() else {
-            return nil
-        }
-        return (last.utilization, last.reset)
-    }
-
-    /// Récupère la limite hebdomadaire propre au modèle Fable via /api/oauth/usage.
-    /// Renvoie nil uniquement quand l'endpoint répond sans limite « weekly_scoped »
-    /// Fable (plans sans cette limite) ; lève une erreur sur tout échec transitoire
-    /// (statut ≠ 200, payload invalide, erreur réseau).
-    private func fetchFableWeekly(token: String) async throws -> (utilization: Double, reset: Date)? {
         let url = URL(string: "https://api.anthropic.com/api/oauth/usage")!
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
@@ -193,10 +163,47 @@ actor RateLimitService {
             if http.statusCode == 401 { throw RateLimitError.unauthorized }
             throw RateLimitError.apiError(statusCode: http.statusCode)
         }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let limits = json["limits"] as? [[String: Any]] else {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw RateLimitError.invalidResponse
         }
+
+        let fiveHour = try Self.parseWindow(json["five_hour"])
+        let sevenDay = try Self.parseWindow(json["seven_day"])
+
+        // Dépassement : `extra_usage.utilization` (pourcentage) ; absent ou null
+        // quand l'option est désactivée → 0 (pill masquée).
+        let overage = ((json["extra_usage"] as? [String: Any])?["utilization"] as? NSNumber)?.doubleValue ?? 0
+
+        let fable = Self.parseFableWeekly(json, weeklyReset: sevenDay.reset)
+
+        return RateLimitData(
+            fiveHourUtilization: fiveHour.utilization,
+            fiveHourReset: fiveHour.reset,
+            sevenDayUtilization: sevenDay.utilization,
+            sevenDayReset: sevenDay.reset,
+            overageUtilization: overage / 100.0,
+            fableUtilization: fable?.utilization,
+            fableReset: fable?.reset,
+            fetchedAt: Date()
+        )
+    }
+
+    /// `{ "utilization": <pourcentage>, "resets_at": <ISO-8601 ou null> }`.
+    /// Sans `resets_at` (fenêtre pas encore ancrée), on retombe sur « maintenant »,
+    /// comme le faisait l'ancien parsing des en-têtes.
+    private static func parseWindow(_ any: Any?) throws -> (utilization: Double, reset: Date) {
+        guard let dict = any as? [String: Any],
+              let percent = (dict["utilization"] as? NSNumber)?.doubleValue else {
+            throw RateLimitError.invalidResponse
+        }
+        let reset = (dict["resets_at"] as? String).flatMap { isoFormatter.date(from: $0) } ?? Date()
+        return (percent / 100.0, reset)
+    }
+
+    /// Limite hebdomadaire propre au modèle Fable dans `limits`. Renvoie nil
+    /// quand le plan n'a pas de limite hebdo scopée (pill masquée).
+    private static func parseFableWeekly(_ json: [String: Any], weeklyReset: Date) -> (utilization: Double, reset: Date)? {
+        guard let limits = json["limits"] as? [[String: Any]] else { return nil }
 
         func isFableScoped(_ entry: [String: Any]) -> Bool {
             guard (entry["kind"] as? String) == "weekly_scoped" else { return false }
@@ -206,29 +213,15 @@ actor RateLimitService {
 
         // Priorité à l'entrée explicitement Fable, sinon toute limite hebdo scopée.
         guard let entry = limits.first(where: isFableScoped)
-                ?? limits.first(where: { ($0["kind"] as? String) == "weekly_scoped" }) else {
-            // Réponse valide mais aucune limite hebdo scopée : plan sans limite Fable.
+                ?? limits.first(where: { ($0["kind"] as? String) == "weekly_scoped" }),
+              let percent = (entry["percent"] as? NSNumber)?.doubleValue else {
             return nil
-        }
-        guard let percent = (entry["percent"] as? NSNumber)?.doubleValue else {
-            throw RateLimitError.invalidResponse
         }
 
         // `resets_at` est nul tant qu'aucune activité n'a ancré la fenêtre hebdo
-        // Fable (semaine encore vierge). La fenêtre Fable étant calée sur la
-        // fenêtre hebdo générale, on retombe alors sur son reset (seven_day),
-        // ce qui permet d'afficher la pill à 0 % dès le début de semaine.
-        let reset: Date
-        if let resetStr = entry["resets_at"] as? String,
-           let parsed = Self.isoFormatter.date(from: resetStr) {
-            reset = parsed
-        } else if let weeklyStr = (json["seven_day"] as? [String: Any])?["resets_at"] as? String,
-                  let weeklyReset = Self.isoFormatter.date(from: weeklyStr) {
-            reset = weeklyReset
-        } else {
-            throw RateLimitError.invalidResponse
-        }
-
+        // Fable (semaine encore vierge) ; la fenêtre Fable étant calée sur la
+        // fenêtre hebdo générale, on retombe alors sur son reset.
+        let reset = (entry["resets_at"] as? String).flatMap { isoFormatter.date(from: $0) } ?? weeklyReset
         return (utilization: percent / 100.0, reset: reset)
     }
 
@@ -238,37 +231,6 @@ actor RateLimitService {
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
     }()
-
-    // MARK: - Header Parsing
-
-    private func parseRateLimitHeaders(_ response: HTTPURLResponse, fable: (utilization: Double, reset: Date)?) -> RateLimitData {
-        let fiveHourUtil = parseDouble(response.value(forHTTPHeaderField: "anthropic-ratelimit-unified-5h-utilization"))
-        let fiveHourReset = parseTimestamp(response.value(forHTTPHeaderField: "anthropic-ratelimit-unified-5h-reset"))
-        let sevenDayUtil = parseDouble(response.value(forHTTPHeaderField: "anthropic-ratelimit-unified-7d-utilization"))
-        let sevenDayReset = parseTimestamp(response.value(forHTTPHeaderField: "anthropic-ratelimit-unified-7d-reset"))
-        let overageUtil = parseDouble(response.value(forHTTPHeaderField: "anthropic-ratelimit-unified-overage-utilization"))
-
-        return RateLimitData(
-            fiveHourUtilization: fiveHourUtil,
-            fiveHourReset: fiveHourReset,
-            sevenDayUtilization: sevenDayUtil,
-            sevenDayReset: sevenDayReset,
-            overageUtilization: overageUtil,
-            fableUtilization: fable?.utilization,
-            fableReset: fable?.reset,
-            fetchedAt: Date()
-        )
-    }
-
-    private func parseDouble(_ value: String?) -> Double {
-        guard let str = value, let val = Double(str) else { return 0 }
-        return val
-    }
-
-    private func parseTimestamp(_ value: String?) -> Date {
-        guard let str = value, let ts = TimeInterval(str) else { return Date() }
-        return Date(timeIntervalSince1970: ts)
-    }
 
     // MARK: - Disk Cache
 

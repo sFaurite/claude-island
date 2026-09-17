@@ -91,7 +91,7 @@ final class NotchWingsController: ObservableObject {
             let data = try await RateLimitService.shared.fetch()
             return data
         } catch {
-            Self.logger.warning("Rate limit fetch failed: \(error.localizedDescription)")
+            Self.logger.warning("Rate limit fetch failed: \(error.localizedDescription, privacy: .public)")
             return rateLimits
         }
     }
