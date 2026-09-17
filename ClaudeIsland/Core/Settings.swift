@@ -207,6 +207,7 @@ enum AppSettings {
         static let wingsFontSize = "wingsFontSize"
         static let wingsLayout = "wingsLayout"
         static let wingsElements = "wingsElements"
+        static let fullscreenDetectionInterval = "fullscreenDetectionInterval"
         // Legacy keys (used for migration only)
         static let wingsShow5h = "wingsShow5h"
         static let wingsShow7j = "wingsShow7j"
@@ -480,6 +481,35 @@ enum AppSettings {
         }
 
         return elements
+    }
+
+    // MARK: - Fullscreen Detection Interval
+
+    /// Bornes autorisées pour la période du timer de détection du plein écran (secondes).
+    static let fullscreenDetectionIntervalRange: ClosedRange<TimeInterval> = 0.2...10.0
+    static let defaultFullscreenDetectionInterval: TimeInterval = 0.5
+
+    /// Notification postée quand la période change (MenuBarDetector relance son timer).
+    static let fullscreenDetectionIntervalDidChange = Notification.Name("AppSettings.fullscreenDetectionIntervalDidChange")
+
+    /// Période du timer de sécurité de MenuBarDetector (0,2–10 s, défaut 0,5 s).
+    /// Seule voie de détection du plein écran non natif de Ghostty : plus la période
+    /// est courte, plus les ailes apparaissent vite, au prix d'un peu de CPU
+    /// (~1,5 ms par vérification, mesuré le 17/09/2026).
+    /// Modifiable sans l'UI : `defaults write com.celestial.ClaudeIsland fullscreenDetectionInterval -float 2`
+    static var fullscreenDetectionInterval: TimeInterval {
+        get {
+            guard defaults.object(forKey: Keys.fullscreenDetectionInterval) != nil else {
+                return defaultFullscreenDetectionInterval
+            }
+            let raw = defaults.double(forKey: Keys.fullscreenDetectionInterval)
+            return min(max(raw, fullscreenDetectionIntervalRange.lowerBound), fullscreenDetectionIntervalRange.upperBound)
+        }
+        set {
+            let clamped = min(max(newValue, fullscreenDetectionIntervalRange.lowerBound), fullscreenDetectionIntervalRange.upperBound)
+            defaults.set(clamped, forKey: Keys.fullscreenDetectionInterval)
+            NotificationCenter.default.post(name: fullscreenDetectionIntervalDidChange, object: nil)
+        }
     }
 
     // MARK: - Max Notification Volume

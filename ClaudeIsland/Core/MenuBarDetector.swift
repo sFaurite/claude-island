@@ -50,15 +50,35 @@ final class MenuBarDetector: ObservableObject {
             .sink { [weak self] _ in self?.scheduleCheck() }
             .store(in: &cancellables)
 
-        // Safety timer to catch missed transitions
-        safetyTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { _ in
+        // Safety timer to catch missed transitions.
+        // C'est la SEULE voie de détection du plein écran non natif de Ghostty
+        // (macos-non-native-fullscreen) : ni activeSpaceDidChange ni
+        // didActivateApplication ne se déclenchent. La période est réglable dans
+        // Préférences > System (0,2–10 s, défaut 0,5 s) ; chaque vérification coûte
+        // ~1,5 ms (mesure du 17/09/2026), soit ~0,3 % CPU à 0,5 s.
+        startSafetyTimer()
+
+        NotificationCenter.default.publisher(for: AppSettings.fullscreenDetectionIntervalDidChange)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.startSafetyTimer() }
+            .store(in: &cancellables)
+
+        // Initial check
+        scheduleCheck()
+    }
+
+    private func startSafetyTimer() {
+        safetyTimer?.invalidate()
+        let interval = AppSettings.fullscreenDetectionInterval
+        let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
             Task { @MainActor [weak self] in
                 self?.check()
             }
         }
-
-        // Initial check
-        scheduleCheck()
+        // Un peu de tolérance : laisse le système regrouper les réveils, sans
+        // dépasser 10 % de la période (latence perçue inchangée).
+        timer.tolerance = interval * 0.1
+        safetyTimer = timer
     }
 
     deinit {

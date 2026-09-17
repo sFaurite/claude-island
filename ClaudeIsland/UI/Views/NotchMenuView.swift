@@ -50,6 +50,7 @@ struct NotchMenuView: View {
     @State private var wingsFontSize: CGFloat = AppSettings.wingsFontSize
     @State private var wingsLayout: WingsLayout = AppSettings.wingsLayout
     @State private var wingsElements: [WingElement] = AppSettings.wingsElements
+    @State private var detectionInterval: Double = AppSettings.fullscreenDetectionInterval
 
     var body: some View {
         VStack(spacing: 4) {
@@ -259,6 +260,9 @@ struct NotchMenuView: View {
                 hooksInstalled = true
             }
         }
+        DetectionIntervalRow(value: $detectionInterval) { newValue in
+            AppSettings.fullscreenDetectionInterval = newValue
+        }
         AccessibilityRow(isEnabled: AXIsProcessTrusted())
         UpdateRow(updateManager: updateManager)
     }
@@ -272,6 +276,7 @@ struct NotchMenuView: View {
         wingsElements = AppSettings.wingsElements
         autoOpenNotch = AppSettings.autoOpenNotch
         expandNotchForActivity = AppSettings.expandNotchForActivity
+        detectionInterval = AppSettings.fullscreenDetectionInterval
     }
 }
 
@@ -778,6 +783,69 @@ private struct FontSizeRow: View {
                 .onChange(of: value) { _, newValue in
                     onChange(newValue)
                 }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+    }
+}
+
+// MARK: - Fullscreen Detection Interval Row
+
+/// Période du timer de détection du plein écran (0,2–10 s). Le curseur est en
+/// échelle logarithmique pour garder de la précision sous 1 s tout en allant
+/// jusqu'à 10 s ; la valeur est arrondie au dixième de seconde.
+private struct DetectionIntervalRow: View {
+    @Binding var value: Double
+    let onChange: (Double) -> Void
+
+    private static let range = AppSettings.fullscreenDetectionIntervalRange
+
+    /// Position du curseur (0…1) ↔ période (échelle log)
+    private var sliderPosition: Binding<Double> {
+        Binding(
+            get: { Self.position(for: value) },
+            set: { newPosition in
+                let raw = Self.range.lowerBound * pow(Self.range.upperBound / Self.range.lowerBound, newPosition)
+                let rounded = (raw * 10).rounded() / 10
+                let clamped = min(max(rounded, Self.range.lowerBound), Self.range.upperBound)
+                if clamped != value {
+                    value = clamped
+                    onChange(clamped)
+                }
+            }
+        )
+    }
+
+    private static func position(for interval: Double) -> Double {
+        log(interval / range.lowerBound) / log(range.upperBound / range.lowerBound)
+    }
+
+    private var label: String {
+        String(format: "%.1fs", value)
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "timer")
+                .font(.system(size: 12))
+                .foregroundColor(.white.opacity(0.7))
+                .frame(width: 16)
+
+            Text("Fullscreen Check")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundColor(.white.opacity(0.7))
+                .help("Période de vérification du plein écran non natif (Ghostty). Plus court = ailes plus réactives, un peu plus de CPU.")
+
+            Spacer()
+
+            Text(label)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(.white.opacity(0.5))
+                .frame(width: 38, alignment: .trailing)
+
+            Slider(value: sliderPosition, in: 0...1)
+                .frame(width: 80)
+                .tint(TerminalColors.green)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
