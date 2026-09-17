@@ -64,6 +64,29 @@ class NotchPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
+    // MARK: - Cadre verrouillé
+
+    /// Cadre imposé par NotchWindowController (pleine largeur de l'écran, 750 pt
+    /// de haut, collé en haut). Une fois posé, toute tentative de redimensionnement
+    /// est ramenée à ce cadre. Nécessaire car NSHostingView continue, même avec
+    /// `sizingOptions = []`, à pousser un cadre animé calé sur la taille idéale du
+    /// contenu SwiftUI (`updateAnimatedWindowSize`) : observé le 17/09/2026 avec un
+    /// panel rétréci à 1482×736 à l'apparition des ailes (bandeau noir décalé de
+    /// 7 pt), et à l'origine de la boucle de contraintes qui faisait planter l'app.
+    var lockedFrame: NSRect?
+
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        super.setFrame(lockedFrame ?? frameRect, display: flag)
+    }
+
+    override func setFrame(_ frameRect: NSRect, display displayFlag: Bool, animate animateFlag: Bool) {
+        super.setFrame(lockedFrame ?? frameRect, display: displayFlag, animate: lockedFrame == nil && animateFlag)
+    }
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        lockedFrame ?? super.constrainFrameRect(frameRect, to: screen)
+    }
+
     // MARK: - Click-through for areas outside the panel content
 
     override func sendEvent(_ event: NSEvent) {

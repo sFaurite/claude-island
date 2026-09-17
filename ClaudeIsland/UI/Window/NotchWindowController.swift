@@ -60,6 +60,7 @@ class NotchWindowController: NSWindowController {
         notchWindow.contentViewController = hostingController
 
         notchWindow.setFrame(windowFrame, display: true)
+        notchWindow.lockedFrame = windowFrame
 
         // Dynamically toggle mouse event handling based on notch state:
         // - Opened: ignoresMouseEvents = false (buttons inside panel work)

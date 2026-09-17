@@ -42,6 +42,17 @@ class NotchViewController: NSViewController {
     override func loadView() {
         hostingView = PassThroughHostingView(rootView: NotchView(viewModel: viewModel))
 
+        // Le panel a un cadre fixe posé par NotchWindowController. Sans ce réglage,
+        // NSHostingView pousse la taille idéale du contenu SwiftUI sur la fenêtre
+        // (min/max/intrinsèque) et la redimensionne pendant les animations, ce qui
+        // crée une boucle « Update Constraints in Window » → NSInternalInconsistencyException
+        // (crashes des 15 et 17/09/2026 à l'apparition des ailes en plein écran).
+        hostingView.sizingOptions = []
+        // Le contenu doit partir du bord supérieur exact de la fenêtre (le pill se
+        // place sous le notch physique, les ailes couvrent la barre de menus) :
+        // on ignore la safe area que SwiftUI déduirait du notch.
+        hostingView.safeAreaRegions = []
+
         // Calculate whether a point is in a hittable zone based on panel state
         hostingView.hitTestCheck = { [weak self] point in
             guard let self = self else { return false }
