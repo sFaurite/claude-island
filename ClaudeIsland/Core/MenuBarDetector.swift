@@ -29,6 +29,18 @@ final class MenuBarDetector: ObservableObject {
     private var safetyTimer: Timer?
     private var activity: NSObjectProtocol?
 
+    // MARK: Ralentissement en inactivité
+    //
+    // Un passage en plein écran suppose une saisie clavier/souris. Sans saisie
+    // depuis `idleAfter`, la vérification coûteuse (CGWindowListCopyWindowInfo,
+    // ~1,6 ms) n'est plus faite qu'une fois par `idleInterval` ; le timer, lui,
+    // continue à la période réglée (réveil ~15 µs) pour repasser à pleine
+    // cadence dès la première saisie, sans latence supplémentaire.
+    private static let idleAfter: TimeInterval = 30
+    private static let idleInterval: TimeInterval = 2.0
+    private static let anyInputEvent = CGEventType(rawValue: ~0)!
+    private var lastCheck = Date.distantPast
+
     init() {
         // Prevent App Nap from suspending our fullscreen detection timer.
         // Without this, the 2s safety timer gets coalesced/delayed indefinitely
@@ -72,7 +84,7 @@ final class MenuBarDetector: ObservableObject {
         let interval = AppSettings.fullscreenDetectionInterval
         let timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { _ in
             Task { @MainActor [weak self] in
-                self?.check()
+                self?.timerTick()
             }
         }
         // Un peu de tolérance : laisse le système regrouper les réveils, sans
@@ -92,7 +104,18 @@ final class MenuBarDetector: ObservableObject {
         }
     }
 
+    /// Tick du timer : vérification à la cadence réglée si l'utilisateur est
+    /// actif, sinon au plus une fois par `idleInterval`.
+    private func timerTick() {
+        let idleFor = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: Self.anyInputEvent)
+        if idleFor > Self.idleAfter, Date().timeIntervalSince(lastCheck) < Self.idleInterval {
+            return
+        }
+        check()
+    }
+
     private func check() {
+        lastCheck = Date()
         // Use private CGS API to detect fullscreen space
         // Space type: 0 = desktop/user, 4 = fullscreen
         let conn = CGSMainConnectionID()
