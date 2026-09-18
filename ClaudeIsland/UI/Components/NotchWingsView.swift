@@ -958,9 +958,11 @@ struct NotchWingsView: View {
 
         let minutes = Int(interval) / 60
         if minutes < 60 { return "\(max(1, minutes))m" }
-        let hours = minutes / 60
+        // Arrondi au plus proche (2h59 → « 3h ») pour rester cohérent avec le
+        // panel de détail qui affiche « 2h 59m » ; la troncature donnait « 2h ».
+        let hours = Int((Double(minutes) / 60).rounded())
         if hours < 24 { return "\(hours)h" }
-        return "\(hours / 24)j"
+        return String(format: "%.0fj", max(1, interval / 86400))
     }
 
     private func formatShortDate(_ dateStr: String) -> String {
