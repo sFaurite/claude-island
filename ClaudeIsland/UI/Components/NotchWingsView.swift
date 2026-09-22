@@ -430,26 +430,26 @@ struct NotchWingsView: View {
         let timeRemaining = max(0, reset.timeIntervalSinceNow)
         let elapsed = windowSeconds - timeRemaining
         let expectedUtil = min(1.0, max(0, elapsed / windowSeconds))
-        // Fenêtres hebdo : second attendu qui ne compte que le temps utile
-        // (hors samedi/dimanche). Il est ≥ l'attendu linéaire en semaine, plafonne
-        // le week-end et rejoint l'attendu linéaire au reset.
+        // Fenêtres hebdo : deux attendus supplémentaires qui ne comptent que le
+        // temps utile — hors samedi/dimanche, puis heures ouvrées seules
+        // (8h–19h hors week-end). Ils dépassent l'attendu linéaire en journée,
+        // plafonnent le reste du temps et le rejoignent au reset.
         let weekdayUtil = weekdayExpectedUtilization(reset: reset, windowSeconds: windowSeconds)
-        let isOverExpected = utilization > expectedUtil
-        let isOverWeekday = utilization > (weekdayUtil ?? expectedUtil)
+        let officeUtil = officeExpectedUtilization(reset: reset, windowSeconds: windowSeconds)
 
         return VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.system(size: fontSize, weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.7))
 
-            progressBar(utilization: utilization, expectedUtilization: expectedUtil, secondaryExpected: weekdayUtil, barWidth: 180, barHeight: 5)
+            progressBar(utilization: utilization, expectedUtilization: expectedUtil, secondaryExpected: weekdayUtil, tertiaryExpected: officeUtil, barWidth: 180, barHeight: 5)
 
-            HStack(spacing: 16) {
+            HStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Utilisé").font(smallFont).foregroundColor(.white.opacity(0.4))
                     Text(formatPercent1(utilization))
                         .font(boldFont)
-                        .foregroundColor(paceColor(utilization, expected: expectedUtil, weekday: weekdayUtil))
+                        .foregroundColor(paceColor(utilization, expected: expectedUtil, weekday: weekdayUtil, office: officeUtil))
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Attendu").font(smallFont).foregroundColor(.white.opacity(0.4))
@@ -463,6 +463,13 @@ struct NotchWingsView: View {
                             .font(boldFont).foregroundColor(TerminalColors.orange.opacity(0.9))
                     }
                 }
+                if let officeUtil {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Ouvré").font(smallFont).foregroundColor(.white.opacity(0.4))
+                        Text(formatPercent1(officeUtil))
+                            .font(boldFont).foregroundColor(TerminalColors.red.opacity(0.9))
+                    }
+                }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Reset").font(smallFont).foregroundColor(.white.opacity(0.4))
                     Text(formatDetailedResetTime(reset))
@@ -473,23 +480,41 @@ struct NotchWingsView: View {
             Text("Reset le \(formatExactResetDateTime(reset))")
                 .font(smallFont).foregroundColor(.white.opacity(0.4))
 
-            if let weekdayUtil, isOverWeekday {
-                Text("▲ +\(formatPercent1(utilization - weekdayUtil)) au-dessus de l'attendu hors week-end")
-                    .font(smallFont).foregroundColor(TerminalColors.red.opacity(0.8))
-            } else if weekdayUtil != nil, isOverExpected {
-                Text("◆ +\(formatPercent1(utilization - expectedUtil)) vs linéaire, dans la marge hors week-end")
-                    .font(smallFont).foregroundColor(TerminalColors.orange.opacity(0.9))
-            } else if isOverExpected {
-                Text("▲ +\(formatPercent1(utilization - expectedUtil)) au-dessus de l'attendu")
-                    .font(smallFont).foregroundColor(TerminalColors.red.opacity(0.8))
-            } else {
-                Text("✓ Sous le rythme attendu")
-                    .font(smallFont).foregroundColor(TerminalColors.green.opacity(0.8))
-            }
+            paceSummary(utilization: utilization, expected: expectedUtil, weekday: weekdayUtil, office: officeUtil)
         }
         .padding(10)
         .background(wingBackground)
         .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
+    }
+
+    /// Attendus nommés, triés par valeur croissante.
+    private static func orderedMarks(expected: Double, weekday: Double?, office: Double?) -> [(name: String, value: Double)] {
+        var marks: [(name: String, value: Double)] = [(name: "linéaire", value: expected)]
+        if let weekday { marks.append((name: "hors week-end", value: weekday)) }
+        if let office { marks.append((name: "heures ouvrées", value: office)) }
+        return marks.sorted { $0.value < $1.value }
+    }
+
+    /// Phrase de synthèse : quel attendu est dépassé, et de combien.
+    /// Les repères n'étant pas ordonnés entre eux (la nuit, l'attendu heures
+    /// ouvrées repasse sous l'attendu hors week-end), on les trie par valeur.
+    @ViewBuilder
+    private func paceSummary(utilization: Double, expected: Double, weekday: Double?, office: Double?) -> some View {
+        let marks = Self.orderedMarks(expected: expected, weekday: weekday, office: office)
+        let exceeded = marks.filter { utilization > $0.value }
+
+        if let highest = marks.last, utilization > highest.value {
+            Text("▲ +\(formatPercent1(utilization - highest.value)) au-dessus de l'attendu \(highest.name)")
+                .font(smallFont).foregroundColor(TerminalColors.red.opacity(0.8))
+        } else if let lastExceeded = exceeded.last,
+                  let nextMark = marks.first(where: { utilization <= $0.value }) {
+            Text("◆ +\(formatPercent1(utilization - lastExceeded.value)) vs \(lastExceeded.name), dans la marge \(nextMark.name)")
+                .font(smallFont)
+                .foregroundColor((exceeded.count >= 2 ? TerminalColors.orange : TerminalColors.yellow).opacity(0.9))
+        } else {
+            Text("✓ Sous le rythme attendu")
+                .font(smallFont).foregroundColor(TerminalColors.green.opacity(0.8))
+        }
     }
 
     private func overageDetail(utilization: Double) -> some View {
@@ -801,8 +826,10 @@ struct NotchWingsView: View {
         let timeRemaining = max(0, reset.timeIntervalSinceNow)
         let elapsed = windowSeconds - timeRemaining
         let expectedUtil = min(1.0, max(0, elapsed / windowSeconds))
-        // Fenêtres hebdo : même lecture que le panel de détail (attendu hors week-end)
+        // Fenêtres hebdo : même lecture que le panel de détail
+        // (attendus hors week-end puis heures ouvrées)
         let weekdayUtil = weekdayExpectedUtilization(reset: reset, windowSeconds: windowSeconds)
+        let officeUtil = officeExpectedUtilization(reset: reset, windowSeconds: windowSeconds)
 
         return HStack(spacing: 4) {
             Text(label)
@@ -810,12 +837,12 @@ struct NotchWingsView: View {
                 .foregroundColor(.white.opacity(0.5))
                 .fixedSize(horizontal: true, vertical: false) // évite « Fable » → « Fab… »
 
-            progressBar(utilization: utilization, expectedUtilization: expectedUtil, secondaryExpected: weekdayUtil)
+            progressBar(utilization: utilization, expectedUtilization: expectedUtil, secondaryExpected: weekdayUtil, tertiaryExpected: officeUtil)
 
             // Le temps de reset (« 1h », « 4j ») suffit à indiquer le compte à
             // rebours ; l'icône ↻ était redondante et a été retirée pour gagner de la place.
             (Text("\(Int(utilization * 100))%")
-                .foregroundColor(paceColor(utilization, expected: expectedUtil, weekday: weekdayUtil).opacity(0.9))
+                .foregroundColor(paceColor(utilization, expected: expectedUtil, weekday: weekdayUtil, office: officeUtil).opacity(0.9))
             + Text(" \(formatResetTime(reset, forceUnit: forceUnit))")
                 .foregroundColor(.white.opacity(0.4)))
                 .font(smallFont)
@@ -838,17 +865,40 @@ struct NotchWingsView: View {
     // MARK: - Progress Bar
 
     /// Barre de progression. `expectedUtilization` = attendu linéaire (repère ambre).
-    /// `secondaryExpected` (fenêtres hebdo) = attendu hors week-end (repère orange) :
-    /// vert jusqu'au plus bas des deux repères, orange entre les deux, rouge au-delà
-    /// du plus haut. Sans second repère, le comportement d'origine est conservé.
-    private func progressBar(utilization: Double, expectedUtilization: Double, secondaryExpected: Double? = nil, barWidth: CGFloat = 40, barHeight: CGFloat = 3) -> some View {
-        GeometryReader { geo in
+    /// `secondaryExpected` (fenêtres hebdo) = attendu hors week-end (repère orange).
+    /// `tertiaryExpected` (fenêtres hebdo) = attendu heures ouvrées (repère rouge).
+    /// Le remplissage est découpé par les repères triés : vert sous le plus bas,
+    /// puis jaune / orange / rouge à mesure qu'on franchit les suivants. Sans
+    /// repère supplémentaire, le comportement d'origine est conservé.
+    private func progressBar(utilization: Double, expectedUtilization: Double, secondaryExpected: Double? = nil, tertiaryExpected: Double? = nil, barWidth: CGFloat = 40, barHeight: CGFloat = 3) -> some View {
+        // Repères (valeur, couleur du tick), dans l'ordre de restriction croissante.
+        var markers: [(value: Double, color: Color)] = [
+            (min(max(0, expectedUtilization), 1.0), TerminalColors.amber)
+        ]
+        if let secondaryExpected {
+            markers.append((min(max(0, secondaryExpected), 1.0), TerminalColors.orange))
+        }
+        if let tertiaryExpected {
+            markers.append((min(max(0, tertiaryExpected), 1.0), TerminalColors.red.opacity(0.9)))
+        }
+        // Les repères ne sont pas ordonnés entre eux (la nuit, l'attendu heures
+        // ouvrées stagne et repasse sous l'attendu hors week-end) : on trie.
+        let bounds = markers.map(\.value).sorted()
+        let zones = Self.zoneColors(boundCount: bounds.count)
+
+        // Segments de remplissage (largeur relative, couleur), du plus bas au plus haut.
+        let actual = min(max(0, utilization), 1.0)
+        var segments: [(width: Double, color: Color)] = []
+        var previous = 0.0
+        for (index, bound) in bounds.enumerated() {
+            let upTo = min(actual, bound)
+            if upTo > previous { segments.append((upTo - previous, zones[index])) }
+            previous = max(previous, bound)
+        }
+        if actual > previous { segments.append((actual - previous, zones[bounds.count])) }
+
+        return GeometryReader { geo in
             let w = geo.size.width
-            let actual = min(utilization, 1.0)
-            let expected = min(expectedUtilization, 1.0)
-            let secondary = secondaryExpected.map { min($0, 1.0) }
-            let low = min(expected, secondary ?? expected)
-            let high = max(expected, secondary ?? expected)
 
             ZStack(alignment: .leading) {
                 // Background
@@ -858,52 +908,71 @@ struct NotchWingsView: View {
 
                 // Remplissage par zones, découpé en capsule
                 HStack(spacing: 0) {
-                    Rectangle()
-                        .fill(TerminalColors.green)
-                        .frame(width: max(1, w * min(actual, low)))
-                    if actual > low {
+                    ForEach(segments.indices, id: \.self) { index in
                         Rectangle()
-                            .fill(TerminalColors.orange)
-                            .frame(width: w * (min(actual, high) - low))
-                    }
-                    if actual > high {
-                        Rectangle()
-                            .fill(TerminalColors.red)
-                            .frame(width: w * (actual - high))
+                            .fill(segments[index].color)
+                            .frame(width: index == 0
+                                   ? max(1, w * segments[index].width)
+                                   : w * segments[index].width)
                     }
                 }
                 .frame(height: barHeight)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .clipShape(Capsule())
 
-                // Repère ambre : attendu linéaire
-                RoundedRectangle(cornerRadius: 0.5)
-                    .fill(TerminalColors.amber)
-                    .frame(width: 1, height: barHeight + 2)
-                    .offset(x: w * expected - 0.5)
-
-                // Repère orange : attendu hors week-end
-                if let secondary {
+                // Repères : ambre (linéaire), orange (hors week-end), rouge (heures ouvrées)
+                ForEach(markers.indices, id: \.self) { index in
                     RoundedRectangle(cornerRadius: 0.5)
-                        .fill(TerminalColors.orange)
+                        .fill(markers[index].color)
                         .frame(width: 1, height: barHeight + 2)
-                        .offset(x: w * secondary - 0.5)
+                        .offset(x: w * markers[index].value - 0.5)
                 }
             }
         }
         .frame(width: barWidth, height: barHeight + 2)
     }
 
-    // MARK: - Attendu hors week-end
+    /// Couleurs des `boundCount + 1` zones de remplissage, du plus permissif au
+    /// plus strict. Avec un seul repère on garde le vert/rouge d'origine.
+    private static func zoneColors(boundCount: Int) -> [Color] {
+        switch boundCount {
+        case 0: return [TerminalColors.green]
+        case 1: return [TerminalColors.green, TerminalColors.red]
+        case 2: return [TerminalColors.green, TerminalColors.orange, TerminalColors.red]
+        default: return [TerminalColors.green, TerminalColors.yellow, TerminalColors.orange, TerminalColors.red]
+        }
+    }
+
+    // MARK: - Attendus hors week-end / heures ouvrées
+
+    /// Bornes des heures ouvrées prises en compte par l'attendu « heures ouvrées ».
+    static let officeStartHour = 8
+    static let officeEndHour = 19
 
     /// Part du temps utile (hors samedi/dimanche, calendrier local) écoulé dans la
     /// fenêtre `[reset − windowSeconds, reset]`. Nil hors fenêtres hebdomadaires.
     private func weekdayExpectedUtilization(reset: Date, windowSeconds: TimeInterval, now: Date = Date()) -> Double? {
+        expectedUtilization(reset: reset, windowSeconds: windowSeconds, now: now, useful: { Self.workingSeconds(from: $0, to: $1) })
+    }
+
+    /// Même lecture, restreinte aux heures ouvrées (8h–19h, hors week-end) :
+    /// c'est l'attendu de quelqu'un qui ne travaille ni le soir ni le week-end.
+    private func officeExpectedUtilization(reset: Date, windowSeconds: TimeInterval, now: Date = Date()) -> Double? {
+        expectedUtilization(reset: reset, windowSeconds: windowSeconds, now: now, useful: { Self.officeSeconds(from: $0, to: $1) })
+    }
+
+    /// Fraction du temps utile écoulée, `useful` définissant ce qui compte comme utile.
+    private func expectedUtilization(
+        reset: Date,
+        windowSeconds: TimeInterval,
+        now: Date,
+        useful: (Date, Date) -> TimeInterval
+    ) -> Double? {
         guard windowSeconds >= 6 * 86400 else { return nil }
         let start = reset.addingTimeInterval(-windowSeconds)
-        let total = Self.workingSeconds(from: start, to: reset)
+        let total = useful(start, reset)
         guard total > 0 else { return nil }
-        let elapsed = Self.workingSeconds(from: start, to: min(max(now, start), reset))
+        let elapsed = useful(start, min(max(now, start), reset))
         return min(1.0, max(0, elapsed / total))
     }
 
@@ -924,15 +993,39 @@ struct NotchWingsView: View {
         return total
     }
 
+    /// Secondes ouvrées (8h–19h, hors week-end) entre deux dates, jour par jour.
+    static func officeSeconds(from start: Date, to end: Date, calendar: Calendar = .current) -> TimeInterval {
+        guard end > start else { return 0 }
+        var total: TimeInterval = 0
+        var cursor = calendar.startOfDay(for: start)
+        while cursor < end {
+            guard let nextDay = calendar.date(byAdding: .day, value: 1, to: cursor) else { break }
+            if !calendar.isDateInWeekend(cursor),
+               let open = calendar.date(bySettingHour: officeStartHour, minute: 0, second: 0, of: cursor),
+               let close = calendar.date(bySettingHour: officeEndHour, minute: 0, second: 0, of: cursor) {
+                let from = max(open, start)
+                let to = min(close, end)
+                if to > from { total += to.timeIntervalSince(from) }
+            }
+            cursor = nextDay
+        }
+        return total
+    }
+
     // MARK: - Helpers
 
-    /// Couleur du rythme : rouge au-delà de l'attendu hors week-end (ou de
-    /// l'attendu linéaire s'il n'y en a pas), orange entre les deux attendus,
+    /// Couleur du rythme, alignée sur les zones de la barre : rouge au-delà du
+    /// repère le plus haut, orange / jaune selon le nombre de repères franchis,
     /// sinon la couleur par niveau d'utilisation.
-    private func paceColor(_ util: Double, expected: Double, weekday: Double?) -> Color {
-        if util > (weekday ?? expected) { return TerminalColors.red }
-        if util > expected { return TerminalColors.orange }
-        return colorForUtilization(util)
+    private func paceColor(_ util: Double, expected: Double, weekday: Double?, office: Double? = nil) -> Color {
+        let bounds = [expected, weekday, office].compactMap { $0 }.sorted()
+        guard let highest = bounds.last else { return colorForUtilization(util) }
+        if util > highest { return TerminalColors.red }
+        switch bounds.filter({ util > $0 }).count {
+        case 0: return colorForUtilization(util)
+        case 1 where bounds.count >= 3: return TerminalColors.yellow
+        default: return TerminalColors.orange
+        }
     }
 
     private func colorForUtilization(_ util: Double, expected: Double? = nil) -> Color {
