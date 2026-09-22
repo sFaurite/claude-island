@@ -447,19 +447,19 @@ struct NotchWingsView: View {
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Utilisé").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text("\(Int(utilization * 100))%")
+                    Text(formatPercent1(utilization))
                         .font(boldFont)
                         .foregroundColor(paceColor(utilization, expected: expectedUtil, weekday: weekdayUtil))
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Attendu").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text("\(Int(expectedUtil * 100))%")
+                    Text(formatPercent1(expectedUtil))
                         .font(boldFont).foregroundColor(TerminalColors.amber.opacity(0.8))
                 }
                 if let weekdayUtil {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Hors WE").font(smallFont).foregroundColor(.white.opacity(0.4))
-                        Text("\(Int(weekdayUtil * 100))%")
+                        Text(formatPercent1(weekdayUtil))
                             .font(boldFont).foregroundColor(TerminalColors.orange.opacity(0.9))
                     }
                 }
@@ -474,13 +474,13 @@ struct NotchWingsView: View {
                 .font(smallFont).foregroundColor(.white.opacity(0.4))
 
             if let weekdayUtil, isOverWeekday {
-                Text("▲ +\(Int((utilization - weekdayUtil) * 100))% au-dessus de l'attendu hors week-end")
+                Text("▲ +\(formatPercent1(utilization - weekdayUtil)) au-dessus de l'attendu hors week-end")
                     .font(smallFont).foregroundColor(TerminalColors.red.opacity(0.8))
             } else if weekdayUtil != nil, isOverExpected {
-                Text("◆ +\(Int((utilization - expectedUtil) * 100))% vs linéaire, dans la marge hors week-end")
+                Text("◆ +\(formatPercent1(utilization - expectedUtil)) vs linéaire, dans la marge hors week-end")
                     .font(smallFont).foregroundColor(TerminalColors.orange.opacity(0.9))
             } else if isOverExpected {
-                Text("▲ +\(Int((utilization - expectedUtil) * 100))% au-dessus de l'attendu")
+                Text("▲ +\(formatPercent1(utilization - expectedUtil)) au-dessus de l'attendu")
                     .font(smallFont).foregroundColor(TerminalColors.red.opacity(0.8))
             } else {
                 Text("✓ Sous le rythme attendu")
@@ -979,6 +979,11 @@ struct NotchWingsView: View {
         let weekday = Calendar.current.component(.weekday, from: date)
         let names = ["Di", "Lu", "Ma", "Me", "Je", "Ve", "Sa"]
         return "\(names[weekday - 1]) \(formatShortDate(dateStr))"
+    }
+
+    /// Pourcentage avec une décimale et virgule française (ex. "2,4%").
+    private func formatPercent1(_ ratio: Double) -> String {
+        String(format: "%.1f%%", ratio * 100).replacingOccurrences(of: ".", with: ",")
     }
 
     private func formatDetailedResetTime(_ date: Date) -> String {
