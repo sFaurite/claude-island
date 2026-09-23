@@ -962,6 +962,30 @@ struct NotchWingsView: View {
     }
 
     // MARK: - Attendus hors week-end / heures ouvrées
+    //
+    // Les trois repères appliquent la même formule, seule la notion de « temps
+    // utile » change (linéaire 168 h, hors WE 120 h, ouvré 55 h par semaine) :
+    //
+    //   attendu = temps utile écoulé depuis le début de la fenêtre
+    //             ÷ temps utile total de la fenêtre
+    //
+    // Pourquoi le temps UTILE écoulé et non le temps écoulé tout court
+    // (« minutes écoulées × 100 % / minutes utiles ») : cette variante donne
+    // des droites sans croisement, mais qui ne finissent pas à 100 % au reset —
+    // l'attendu ouvré atteindrait 100 % au bout de 55 h (2,3 jours) puis ~300 %
+    // au reset, car elle suppose une consommation au rythme ouvré 24 h/24.
+    //
+    // Conséquences assumées de ce choix :
+    //   • paliers : l'attendu ouvré ne monte qu'entre 8 h et 19 h, plat la nuit ;
+    //     il juge donc aussi l'HEURE de consommation (beaucoup à 9 h = rouge,
+    //     la même chose à 22 h passe). Si seule compte la journée, c'est
+    //     l'attendu hors WE qu'il faut lire : c'est l'ouvré lissé sur 24 h
+    //     (chaque jour de semaine = 1/5 dans les deux cas, d'où leur égalité
+    //     chaque matin à 8 h) ;
+    //   • croisements : deux courbes allant de 0 à 100 % avec des formes
+    //     différentes se croisent forcément (ex. le week-end, le linéaire
+    //     rattrape les deux autres quand il reste des jours ouvrés après) —
+    //     d'où le tri des repères dans progressBar / paceColor / paceSummary.
 
     /// Bornes des heures ouvrées prises en compte par l'attendu « heures ouvrées ».
     static let officeStartHour = 8
