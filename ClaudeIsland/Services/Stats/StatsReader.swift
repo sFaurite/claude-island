@@ -23,6 +23,28 @@ struct DayHistoryEntry: Sendable {
     let costUSD: Double
 }
 
+/// Coût moyen par jour ouvré actif sur une période glissante — « conso moyenne »
+/// servant à projeter un coût annuel par ETP.
+struct WorkdayCostAverage: Sendable {
+    let label: String         // "Total", "90 j", "30 j"
+    let perWorkdayUSD: Double
+    let workdays: Int         // jours lun–ven avec activité dans la période
+
+    /// Jours travaillés par an retenus pour un ETP.
+    static let workdaysPerFTE = 200.0
+    var perFTEYearUSD: Double { perWorkdayUSD * Self.workdaysPerFTE }
+}
+
+/// Un point du graphe de tendance : moyennes €/jour ouvré actif sur les
+/// fenêtres se terminant au jour `date` (UTC). nil tant que la fenêtre n'est
+/// pas couverte par l'historique (une moyenne 90 j sur 40 jours tromperait).
+struct WorkdayCostPoint: Sendable {
+    let date: Date
+    let totalUSD: Double?
+    let d90USD: Double?
+    let d30USD: Double?
+}
+
 struct DailyStats: Sendable {
     let messageCount: Int
     let sessionCount: Int
@@ -48,6 +70,8 @@ struct DailyStats: Sendable {
     let lastDayToolCalls: Int
     let lastDayTokens: Int
     let lastDayCostUSD: Double
+    let workdayCostAverages: [WorkdayCostAverage]
+    let workdayCostTrend: [WorkdayCostPoint]
     let last7Days: [DayHistoryEntry]
 }
 
@@ -180,6 +204,9 @@ struct StatsReader: Sendable {
             }
         let last7Days = Array(recentDays)
 
+        let workdayAverages = Self.workdayCostAverages(costByDate: costByDate, today: today)
+        let workdayTrend = Self.workdayCostTrend(costByDate: costByDate, today: today)
+
         return DailyStats(
             messageCount: activity?.messageCount ?? 0,
             sessionCount: activity?.sessionCount ?? 0,
@@ -203,8 +230,80 @@ struct StatsReader: Sendable {
             lastDayToolCalls: lastDay?.toolCallCount ?? 0,
             lastDayTokens: lastDayTokenCount,
             lastDayCostUSD: lastDay.flatMap { costByDate[$0.date] } ?? 0,
+            workdayCostAverages: workdayAverages,
+            workdayCostTrend: workdayTrend,
             last7Days: last7Days
         )
+    }
+}
+
+extension StatsReader {
+    /// Moyennes par jour ouvré actif : tout l'historique, 90 et 30 derniers jours.
+    /// Tout le coût de la période (week-ends compris) est réparti sur les seuls
+    /// jours lun–ven avec activité : le week-end est du travail « en plus », et
+    /// les congés sont exclus comme dans les 200 j/an d'un ETP. Aujourd'hui,
+    /// journée incomplète, est exclu. Clés de jour UTC (comme le cache).
+    static func workdayCostAverages(costByDate: [String: Double], today: String) -> [WorkdayCostAverage] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        guard let todayDate = utcDateFormatter.date(from: today) else { return [] }
+
+        func average(label: String, days: Int?) -> WorkdayCostAverage {
+            let from = days.flatMap { calendar.date(byAdding: .day, value: -$0, to: todayDate) }
+            var cost = 0.0
+            var workdays = 0
+            for (key, usd) in costByDate where key < today {
+                guard let date = utcDateFormatter.date(from: key) else { continue }
+                if let from, date < from { continue }
+                cost += usd
+                if usd > 0, !calendar.isDateInWeekend(date) { workdays += 1 }
+            }
+            return WorkdayCostAverage(label: label, perWorkdayUSD: workdays > 0 ? cost / Double(workdays) : 0,
+                                      workdays: workdays)
+        }
+        return [average(label: "Total", days: nil), average(label: "90 j", days: 90), average(label: "30 j", days: 30)]
+    }
+
+    /// Série quotidienne des mêmes moyennes (dernier point = tableau), du premier
+    /// jour de l'historique à hier. Sommes préfixes → une seule passe.
+    static func workdayCostTrend(costByDate: [String: Double], today: String) -> [WorkdayCostPoint] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        guard let todayDate = utcDateFormatter.date(from: today),
+              let firstKey = costByDate.keys.min(),
+              let firstDate = utcDateFormatter.date(from: firstKey),
+              firstDate < todayDate else { return [] }
+
+        // Jours continus [premier jour, hier] ; cumuls coût et jours ouvrés actifs.
+        var dates: [Date] = []
+        var cumCost: [Double] = [0]
+        var cumWorkdays: [Int] = [0]
+        var day = firstDate
+        while day < todayDate {
+            let usd = costByDate[utcDateFormatter.string(from: day)] ?? 0
+            let isWorkday = usd > 0 && !calendar.isDateInWeekend(day)
+            dates.append(day)
+            cumCost.append(cumCost.last! + usd)
+            cumWorkdays.append(cumWorkdays.last! + (isWorkday ? 1 : 0))
+            guard let next = calendar.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+
+        // Moyenne sur les `window` derniers jours se terminant à l'index i (nil si
+        // l'historique ne couvre pas la fenêtre ou sans jour ouvré actif).
+        func average(endingAt i: Int, window: Int?) -> Double? {
+            let lower = window.map { i + 1 - $0 } ?? 0
+            guard lower >= 0 else { return nil }
+            let workdays = cumWorkdays[i + 1] - cumWorkdays[lower]
+            guard workdays > 0 else { return nil }
+            return (cumCost[i + 1] - cumCost[lower]) / Double(workdays)
+        }
+        return dates.indices.map { i in
+            WorkdayCostPoint(date: dates[i],
+                             totalUSD: average(endingAt: i, window: nil),
+                             d90USD: average(endingAt: i, window: 90),
+                             d30USD: average(endingAt: i, window: 30))
+        }
     }
 }
 

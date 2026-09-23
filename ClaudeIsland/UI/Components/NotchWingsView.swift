@@ -182,6 +182,10 @@ struct NotchWingsView: View {
         case .daily:
             guard let st = stats, !st.last7Days.isEmpty else { return 108 }
             return CGFloat(20 + 18 + st.last7Days.count * 18)
+        case .tokensAllTime:
+            // Bloc de base + tableau de projection (titre, en-tête, 3 lignes)
+            // + graphe de tendance (légende, 90 pt, note)
+            return 108 + 5 * (fontSize + 6) + 8 + 90 + 2 * (fontSize + 6) + 16
         default:
             return 108
         }
@@ -618,27 +622,33 @@ struct NotchWingsView: View {
         let dayCount = max(1, st.heatmapEntries.count)
         let avgPerDay = st.totalTokensAllTime / dayCount
 
+        // Largeur fixe (graphe + légende sur une ligne) ; le haut se répartit dessus.
+        let panelWidth = allTimePanelWidth
+
         return VStack(alignment: .leading, spacing: 8) {
             Text("Tokens — All Time")
                 .font(.system(size: fontSize, weight: .bold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.7))
 
-            HStack(spacing: 16) {
+            HStack(alignment: .top, spacing: 0) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Total").font(smallFont).foregroundColor(.white.opacity(0.4))
                     Text(formatTokens(st.totalTokensAllTime))
                         .font(boldFont).foregroundColor(.white.opacity(0.7))
                 }
+                Spacer(minLength: 12)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Moy/jour").font(smallFont).foregroundColor(.white.opacity(0.4))
                     Text("~" + formatTokens(avgPerDay))
                         .font(boldFont).foregroundColor(.white.opacity(0.6))
                 }
+                Spacer(minLength: 12)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Coût API").font(smallFont).foregroundColor(.white.opacity(0.4))
                     Text(formatEuros(st.totalCostAllTimeUSD))
                         .font(boldFont).foregroundColor(.white.opacity(0.7))
                 }
+                Spacer(minLength: 12)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("€/jour").font(smallFont).foregroundColor(.white.opacity(0.4))
                     Text("~" + formatEuros(st.totalCostAllTimeUSD / Double(dayCount)))
@@ -653,11 +663,56 @@ struct NotchWingsView: View {
                 Text("\(st.totalMessagesAllTime) msgs")
                     .font(smallFont).foregroundColor(.white.opacity(0.4))
             }
+
+            workdayProjection(st.workdayCostAverages)
+
+            if st.workdayCostTrend.count > 1 {
+                WorkdayCostChart(points: st.workdayCostTrend, fontSize: fontSize)
+            }
         }
+        .frame(width: panelWidth, alignment: .leading)
         .padding(10)
         .background(wingBackground)
         .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
     }
+
+    /// « Conso moyenne » glissante, comme l'autonomie projetée d'un véhicule
+    /// électrique : coût par jour ouvré actif et projection sur un ETP (200 j/an).
+    @ViewBuilder
+    private func workdayProjection(_ averages: [WorkdayCostAverage]) -> some View {
+        if !averages.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Projection — par jour ouvré actif")
+                    .font(boldFont).foregroundColor(.white.opacity(0.6))
+                    .padding(.bottom, 1)
+                HStack(spacing: 0) {
+                    Text("Période").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("€/j ouvré").frame(maxWidth: .infinity, alignment: .trailing)
+                    Text("ETP/an").frame(maxWidth: .infinity, alignment: .trailing)
+                    Text("Jours").frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .font(smallFont).foregroundColor(.white.opacity(0.35))
+                ForEach(averages.indices, id: \.self) { index in
+                    let avg = averages[index]
+                    HStack(spacing: 0) {
+                        Text(avg.label).frame(maxWidth: .infinity, alignment: .leading)
+                            .foregroundColor(.white.opacity(0.5))
+                        Text(formatEuros(avg.perWorkdayUSD)).frame(maxWidth: .infinity, alignment: .trailing)
+                            .foregroundColor(.white.opacity(0.7))
+                        Text(formatEuros(avg.perFTEYearUSD)).frame(maxWidth: .infinity, alignment: .trailing)
+                            .foregroundColor(TerminalColors.amber.opacity(0.8))
+                        Text("\(avg.workdays)").frame(maxWidth: .infinity, alignment: .trailing)
+                            .foregroundColor(.white.opacity(0.35))
+                    }
+                    .font(boldFont)
+                }
+            }
+        }
+    }
+
+    /// Largeur du panneau all-time : de quoi tenir la légende du graphe sur une
+    /// ligne (3 × « ▬ Total 1.2k € » + date) à la taille de police choisie.
+    private var allTimePanelWidth: CGFloat { max(360, fontSize * 38) }
 
     private func tokensTodayDetail(_ st: DailyStats) -> some View {
         let todayTokens = st.todayLiveTokens > 0 ? st.todayLiveTokens : st.totalTokens
