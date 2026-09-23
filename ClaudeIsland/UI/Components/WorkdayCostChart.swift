@@ -106,7 +106,7 @@ struct WorkdayCostChart: View {
             .chartXAxis {
                 AxisMarks(values: .stride(by: .month)) { _ in
                     AxisGridLine().foregroundStyle(.white.opacity(0.06))
-                    AxisValueLabel(format: .dateTime.month(.abbreviated), centered: false)
+                    AxisValueLabel(format: .dateTime.month(.abbreviated).locale(Self.frLocale), centered: false)
                         .font(.system(size: fontSize - 2, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.35))
                 }
@@ -140,7 +140,6 @@ struct WorkdayCostChart: View {
                 }
             }
             .frame(height: 90)
-            .environment(\.locale, Locale(identifier: "fr_FR"))  // mois de l'axe en français
 
             Text("€ par jour ouvré actif · ETP = ×200")
                 .font(.system(size: fontSize - 2, design: .monospaced))
@@ -154,6 +153,10 @@ struct WorkdayCostChart: View {
         f.timeZone = TimeZone(identifier: "UTC")
         return f
     }()
+
+    /// Locale explicite : l'app n'étant pas localisée en français, Locale.current
+    /// y vaut l'anglais, et les étiquettes d'axe ignorent `.environment(\.locale)`.
+    private static let frLocale = Locale(identifier: "fr_FR")
 
     private static func formatEur(_ eur: Double) -> String {
         eur >= 1_000 ? String(format: "%.1fk €", eur / 1_000) : String(format: "%.0f €", eur)

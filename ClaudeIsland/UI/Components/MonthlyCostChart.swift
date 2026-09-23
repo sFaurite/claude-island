@@ -61,7 +61,7 @@ struct MonthlyCostChart: View {
             }
             .chartXAxis {
                 AxisMarks(values: .stride(by: .month)) { _ in
-                    AxisValueLabel(format: .dateTime.month(.abbreviated), centered: true)
+                    AxisValueLabel(format: .dateTime.month(.abbreviated).locale(Self.frLocale), centered: true)
                         .font(.system(size: fontSize - 2, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.35))
                 }
@@ -95,7 +95,6 @@ struct MonthlyCostChart: View {
                 }
             }
             .frame(height: 90)
-            .environment(\.locale, Locale(identifier: "fr_FR"))  // mois de l'axe en français
 
             Text("Coût réel par mois · mois en cours : à date + projection estompée")
                 .font(.system(size: fontSize - 2, design: .monospaced))
@@ -110,6 +109,10 @@ struct MonthlyCostChart: View {
         f.timeZone = TimeZone(identifier: "UTC")
         return f
     }()
+
+    /// Locale explicite : l'app n'étant pas localisée en français, Locale.current
+    /// y vaut l'anglais, et les étiquettes d'axe ignorent `.environment(\.locale)`.
+    private static let frLocale = Locale(identifier: "fr_FR")
 
     private static func formatEur(_ eur: Double) -> String {
         eur >= 1_000 ? String(format: "%.1fk €", eur / 1_000) : String(format: "%.0f €", eur)
