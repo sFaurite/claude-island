@@ -20,6 +20,7 @@ struct DayHistoryEntry: Sendable {
     let sessions: Int
     let toolCalls: Int
     let tokens: Int
+    let costUSD: Double
 }
 
 struct DailyStats: Sendable {
@@ -31,8 +32,12 @@ struct DailyStats: Sendable {
     let totalMessagesAllTime: Int
     let totalTokensAllTime: Int
     let todayLiveTokens: Int  // computed from JSONL files
+    // Coût équivalent API (USD) — cf. ModelPricing
+    let todayCostUSD: Double
+    let totalCostAllTimeUSD: Double
     let recordDate: String    // day with most tokens
     let recordTokens: Int
+    let recordCostUSD: Double
     let date: String
     let isToday: Bool
     let heatmapEntries: [HeatmapEntry]
@@ -42,6 +47,7 @@ struct DailyStats: Sendable {
     let lastDaySessions: Int
     let lastDayToolCalls: Int
     let lastDayTokens: Int
+    let lastDayCostUSD: Double
     let last7Days: [DayHistoryEntry]
 }
 
@@ -101,22 +107,28 @@ struct StatsReader: Sendable {
 
         let dayTokens = modelTokens?.tokensByModel.values.reduce(0, +) ?? 0
 
-        // All-time tokens: sum inputTokens + outputTokens across all models
+        // All-time tokens (intensité) : input + écritures de cache + output
         let allTimeCacheTokens = cache.modelUsage.values.reduce(0) { sum, usage in
-            sum + usage.inputTokens + usage.outputTokens
+            sum + usage.inputTokens + usage.outputTokens + (usage.cacheCreationInputTokens ?? 0)
         }
+        let allTimeCacheCost = cache.modelUsage.values.reduce(0) { $0 + ($1.costUSD ?? 0) }
 
-        let liveTokens = readTodayLiveTokens()
+        let live = TodayTokensCache.shared.today(pricing: cache.pricing ?? .empty)
+        let liveTokens = live.tokens
 
-        // Build token lookup by date
+        // Build token / cost lookup by date
         var tokensByDate: [String: Int] = [:]
+        var costByDate: [String: Double] = [:]
         for entry in cache.dailyModelTokens {
             tokensByDate[entry.date] = entry.tokensByModel.values.reduce(0, +)
+            costByDate[entry.date] = entry.costUSD ?? 0
         }
-        // Use live tokens for today if higher than cache
+        let cachedTodayCost = costByDate[today] ?? 0
+        // Use live values for today if higher than cache
         if liveTokens > (tokensByDate[today] ?? 0) {
             tokensByDate[today] = liveTokens
         }
+        let todayCost = max(live.costUSD, cachedTodayCost)
 
         // Heatmap entries from dailyActivity
         let heatmap = cache.dailyActivity.compactMap { entry -> HeatmapEntry? in
@@ -126,6 +138,7 @@ struct StatsReader: Sendable {
 
         // All-time = cache total + any live tokens beyond what cache already knows for today
         let allTimeTokens = allTimeCacheTokens + max(0, liveTokens - dayTokens)
+        let allTimeCost = allTimeCacheCost + max(0, live.costUSD - cachedTodayCost)
 
         // Record day (most tokens in a single day)
         var recDate = ""
@@ -142,6 +155,7 @@ struct StatsReader: Sendable {
             recTokens = liveTokens
             recDate = today
         }
+        let recCost = recDate == today ? todayCost : (costByDate[recDate] ?? 0)
 
         // Last non-empty day excluding today
         let lastDay = cache.dailyActivity
@@ -160,7 +174,8 @@ struct StatsReader: Sendable {
                     messages: entry.messageCount,
                     sessions: entry.sessionCount,
                     toolCalls: entry.toolCallCount,
-                    tokens: tokensByDate[entry.date] ?? 0
+                    tokens: tokensByDate[entry.date] ?? 0,
+                    costUSD: costByDate[entry.date] ?? 0
                 )
             }
         let last7Days = Array(recentDays)
@@ -174,8 +189,11 @@ struct StatsReader: Sendable {
             totalMessagesAllTime: cache.totalMessages,
             totalTokensAllTime: allTimeTokens,
             todayLiveTokens: liveTokens,
+            todayCostUSD: todayCost,
+            totalCostAllTimeUSD: allTimeCost,
             recordDate: recDate,
             recordTokens: recTokens,
+            recordCostUSD: recCost,
             date: date,
             isToday: isToday,
             heatmapEntries: heatmap,
@@ -184,32 +202,9 @@ struct StatsReader: Sendable {
             lastDaySessions: lastDay?.sessionCount ?? 0,
             lastDayToolCalls: lastDay?.toolCallCount ?? 0,
             lastDayTokens: lastDayTokenCount,
+            lastDayCostUSD: lastDay.flatMap { costByDate[$0.date] } ?? 0,
             last7Days: last7Days
         )
-    }
-
-    // MARK: - Live Today Tokens (from JSONL files)
-
-    /// Scans JSONL files modified today to compute live token usage.
-    /// Sources: CLI sessions (Mac local + VM mirror via sandbox-sync), subagents,
-    /// workflows, and Desktop local-agent-mode sessions.
-    ///
-    /// Aligné sur refresh-claude-stats.mjs (correctifs juin 2026) :
-    ///   1. Scan récursif complet — attrape aussi les transcripts subagents
-    ///      (<session>/subagents/) ET workflows (subagents/workflows/wf_*/),
-    ///      qu'un scan à profondeur fixe ratait (~1M tokens/jour workflow).
-    ///   2. Dédup des blocs usage par message.id en gardant l'usage FINAL :
-    ///      une réponse est écrite sur N lignes (tool-calls parallèles à usage
-    ///      identique, ou blocs streamés dont output_tokens croît ligne à ligne).
-    ///      On compte input/cache une seule fois puis seulement le delta d'output
-    ///      révélé ensuite — « garder la 1re ligne » figeait l'output partiel.
-    ///   3. Jour identifié en UTC (comme toISOString côté .mjs) : les timestamps
-    ///      JSONL sont en UTC, on compare donc un préfixe UTC.
-    ///
-    /// Depuis le 17/09/2026 le calcul est incrémental (TodayTokensCache) :
-    /// parcours complet rare, reparsing limité aux octets ajoutés.
-    private static func readTodayLiveTokens() -> Int {
-        TodayTokensCache.shared.todayTokens()
     }
 }
 
@@ -221,6 +216,7 @@ private struct StatsCache: Codable {
     let modelUsage: [String: ModelUsageEntry]
     let totalSessions: Int
     let totalMessages: Int
+    let pricing: ModelPricing?    // absent avant le cache v3
 }
 
 private struct DailyActivityEntry: Codable {
@@ -233,9 +229,12 @@ private struct DailyActivityEntry: Codable {
 private struct DailyModelTokenEntry: Codable {
     let date: String
     let tokensByModel: [String: Int]
+    let costUSD: Double?          // absent avant le cache v3
 }
 
 private struct ModelUsageEntry: Codable {
     let inputTokens: Int
     let outputTokens: Int
+    let cacheCreationInputTokens: Int?
+    let costUSD: Double?
 }

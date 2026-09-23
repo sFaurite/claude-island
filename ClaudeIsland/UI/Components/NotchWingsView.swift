@@ -373,7 +373,7 @@ struct NotchWingsView: View {
             }
         case "tokensAllTime":
             if let st = stats {
-                Text("Σ " + formatTokens(st.totalTokensAllTime))
+                Text("Σ " + formatTokens(st.totalTokensAllTime) + " · " + formatEuros(st.totalCostAllTimeUSD))
                     .font(boldFont).foregroundColor(.white.opacity(0.5))
                     .contentShape(Rectangle())
                     .onTapGesture { toggleSection(.tokensAllTime) }
@@ -381,7 +381,7 @@ struct NotchWingsView: View {
         case "tokensToday":
             if let st = stats {
                 let todayTokens = st.todayLiveTokens > 0 ? st.todayLiveTokens : st.totalTokens
-                Text("⇡ " + formatTokens(todayTokens))
+                Text("⇡ " + formatTokens(todayTokens) + " · " + formatEuros(st.todayCostUSD))
                     .font(boldFont).foregroundColor(.white.opacity(0.7))
                     .contentShape(Rectangle())
                     .onTapGesture { toggleSection(.tokensToday) }
@@ -391,13 +391,7 @@ struct NotchWingsView: View {
                 HStack(spacing: 4) {
                     Text(formatShortDate(lastDate))
                         .font(boldFont).foregroundColor(.white.opacity(0.35))
-                    Text("\(st.lastDayMessages) msgs")
-                        .font(wingFont).foregroundColor(.white.opacity(0.5))
-                    Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
-                    Text("\(st.lastDaySessions) sess")
-                        .font(wingFont).foregroundColor(.white.opacity(0.5))
-                    Text("·").font(wingFont).foregroundColor(.white.opacity(0.2))
-                    Text(formatTokens(st.lastDayTokens))
+                    Text(formatTokens(st.lastDayTokens) + " · " + formatEuros(st.lastDayCostUSD))
                         .font(wingFont).foregroundColor(.white.opacity(0.5))
                 }
                 .contentShape(Rectangle())
@@ -407,7 +401,7 @@ struct NotchWingsView: View {
             if let st = stats, st.recordTokens > 0 {
                 HStack(spacing: 2) {
                     Text("🏆").font(.system(size: fontSize - 3))
-                    Text(formatShortDate(st.recordDate) + " " + formatTokens(st.recordTokens))
+                    Text(formatShortDate(st.recordDate) + " " + formatTokens(st.recordTokens) + " · " + formatEuros(st.recordCostUSD))
                         .font(smallFont)
                 }
                 .foregroundColor(TerminalColors.amber.opacity(0.7))
@@ -640,6 +634,16 @@ struct NotchWingsView: View {
                     Text("~" + formatTokens(avgPerDay))
                         .font(boldFont).foregroundColor(.white.opacity(0.6))
                 }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Coût API").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text(formatEuros(st.totalCostAllTimeUSD))
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("€/jour").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("~" + formatEuros(st.totalCostAllTimeUSD / Double(dayCount)))
+                        .font(boldFont).foregroundColor(.white.opacity(0.6))
+                }
             }
 
             HStack(spacing: 4) {
@@ -667,6 +671,11 @@ struct NotchWingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Tokens").font(smallFont).foregroundColor(.white.opacity(0.4))
                     Text(formatTokens(todayTokens))
+                        .font(boldFont).foregroundColor(.white.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Coût API").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text(formatEuros(st.todayCostUSD))
                         .font(boldFont).foregroundColor(.white.opacity(0.7))
                 }
                 VStack(alignment: .leading, spacing: 2) {
@@ -717,6 +726,8 @@ struct NotchWingsView: View {
                         .frame(width: 54, alignment: .trailing)
                     Text("Tokens")
                         .frame(width: 60, alignment: .trailing)
+                    Text("Coût")
+                        .frame(width: 60, alignment: .trailing)
                 }
                 .font(smallFont)
                 .foregroundColor(.white.opacity(0.35))
@@ -756,6 +767,8 @@ struct NotchWingsView: View {
                         Text("\(entry.toolCalls)")
                             .frame(width: 54, alignment: .trailing)
                         Text(formatTokens(entry.tokens))
+                            .frame(width: 60, alignment: .trailing)
+                        Text(formatEuros(entry.costUSD))
                             .frame(width: 60, alignment: .trailing)
                     }
                     .font(smallFont)
@@ -804,6 +817,11 @@ struct NotchWingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Tokens").font(smallFont).foregroundColor(.white.opacity(0.4))
                     Text(formatTokens(st.recordTokens))
+                        .font(boldFont).foregroundColor(TerminalColors.amber.opacity(0.7))
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Coût API").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text(formatEuros(st.recordCostUSD))
                         .font(boldFont).foregroundColor(TerminalColors.amber.opacity(0.7))
                 }
             }
@@ -1111,6 +1129,17 @@ struct NotchWingsView: View {
         fmt.dateFormat = "yyyy-MM-dd"
         fmt.timeZone = .current
         return fmt.date(from: dateStr)
+    }
+
+    /// Coût équivalent API converti en euros (taux figé ModelPricing.usdToEur).
+    private func formatEuros(_ usd: Double) -> String {
+        let eur = usd * ModelPricing.usdToEur
+        if eur >= 1_000 {
+            return String(format: "%.1fk €", eur / 1_000)
+        } else if eur >= 10 {
+            return String(format: "%.0f €", eur)
+        }
+        return String(format: "%.1f €", eur)
     }
 
     private func formatTokens(_ count: Int) -> String {

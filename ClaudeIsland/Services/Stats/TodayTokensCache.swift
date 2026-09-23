@@ -16,9 +16,11 @@
 //      JSONL sont en append seul) ; un fichier inchangé (taille + mtime) n'est
 //      pas relu.
 //
-//  Sémantique conservée à l'identique : par message.id (ou fichier|timestamp),
-//  input compté une fois et output = valeur finale (max) — cf. dédup de
-//  refresh-claude-stats.mjs.
+//  Sémantique alignée sur refresh-claude-stats.mjs : par message.id (ou
+//  fichier|timestamp), input/cache comptés une fois et output = valeur finale
+//  (max). Depuis le 23/09/2026 : tokens = input + cache_creation + output
+//  (intensité, lectures de cache exclues) et coût équivalent API (USD, tarifs
+//  ModelPricing, lectures de cache incluses).
 //
 
 import Foundation
@@ -33,7 +35,27 @@ final class TodayTokensCache: @unchecked Sendable {
     /// sans événement reçu, ou toute désynchronisation).
     private static let fullWalkInterval: TimeInterval = 30 * 60
 
-    struct Usage { var input: Int; var output: Int }
+    struct Usage {
+        var model: String
+        var input: Int
+        var write5m: Int
+        var write1h: Int
+        var read: Int
+        var output: Int
+        var webSearches: Int
+        var fast: Bool
+
+        var tokens: Int { input + write5m + write1h + output }
+        func costUSD(_ pricing: ModelPricing) -> Double {
+            pricing.costUSD(model: model, input: input, write5m: write5m, write1h: write1h,
+                            read: read, output: output, webSearches: webSearches, fast: fast)
+        }
+    }
+
+    struct Today: Sendable {
+        let tokens: Int
+        let costUSD: Double
+    }
 
     private struct FileState {
         var size: UInt64
@@ -74,8 +96,9 @@ final class TodayTokensCache: @unchecked Sendable {
 
     // MARK: - API
 
-    /// Total des tokens (input + output final) des blocs usage datés d'aujourd'hui (UTC).
-    func todayTokens() -> Int {
+    /// Tokens (input + cache_creation + output final) et coût API des blocs usage
+    /// datés d'aujourd'hui (UTC). `pricing` : table lue dans stats-cache.json.
+    func today(pricing: ModelPricing) -> Today {
         lock.lock(); defer { lock.unlock() }
 
         startStreamIfNeeded()
@@ -150,11 +173,12 @@ final class TodayTokensCache: @unchecked Sendable {
                 }
             }
         }
-        let total = merged.values.reduce(0) { $0 + $1.input + $1.output }
+        let total = merged.values.reduce(0) { $0 + $1.tokens }
+        let cost = merged.values.reduce(0) { $0 + $1.costUSD(pricing) }
 
         let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-        Self.logger.debug("todayTokens=\(total) files=\(self.files.count) reparsed=\(reparsed) fullWalk=\(fullWalk) \(ms, format: .fixed(precision: 1))ms")
-        return total
+        Self.logger.debug("todayTokens=\(total) cost=\(cost, format: .fixed(precision: 2)) files=\(self.files.count) reparsed=\(reparsed) fullWalk=\(fullWalk) \(ms, format: .fixed(precision: 1))ms")
+        return Today(tokens: total, costUSD: cost)
     }
 
     // MARK: - Parcours
@@ -201,6 +225,7 @@ final class TodayTokensCache: @unchecked Sendable {
                   let timestamp = obj["timestamp"] as? String,
                   timestamp.hasPrefix(todayPrefix),
                   let message = obj["message"] as? [String: Any],
+                  let model = message["model"] as? String,
                   let usage = message["usage"] as? [String: Any] else { continue }
 
             let key: String
@@ -214,7 +239,21 @@ final class TodayTokensCache: @unchecked Sendable {
                 existing.output = max(existing.output, output)
                 state.usage[key] = existing
             } else {
-                state.usage[key] = Usage(input: usage["input_tokens"] as? Int ?? 0, output: output)
+                // Répartition des écritures par TTL ; absente → tout en 5 min.
+                let created = usage["cache_creation_input_tokens"] as? Int ?? 0
+                let byTTL = usage["cache_creation"] as? [String: Any]
+                let write1h = byTTL?["ephemeral_1h_input_tokens"] as? Int ?? 0
+                let serverTools = usage["server_tool_use"] as? [String: Any]
+                state.usage[key] = Usage(
+                    model: model,
+                    input: usage["input_tokens"] as? Int ?? 0,
+                    write5m: max(0, created - write1h),
+                    write1h: write1h,
+                    read: usage["cache_read_input_tokens"] as? Int ?? 0,
+                    output: output,
+                    webSearches: serverTools?["web_search_requests"] as? Int ?? 0,
+                    fast: usage["speed"] as? String == "fast"
+                )
             }
         }
     }

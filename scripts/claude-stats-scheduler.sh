@@ -1,7 +1,7 @@
 #!/bin/bash
 # claude-stats-scheduler.sh
 # Recalcule ~/.claude/stats-cache.json à chaque tick (1×/h via launchd).
-# Recalcul complet : ~1-2s pour ~17k fichiers de session JSONL.
+# Recalcul complet : ~25 s pour ~25k fichiers de session JSONL (09/2026).
 #
 # LaunchAgent : ~/Library/LaunchAgents/com.claude.stats-scheduler.plist
 

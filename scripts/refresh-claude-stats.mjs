@@ -52,8 +52,65 @@ const CLI_PROJECT_ROOTS = [
 //     "input": N, "output": N, "model": "claude-..." (optionnel) } ] }
 const VM_SNAPSHOT_FILE = join(homedir(), '.claude-island', 'vm-usage-snapshot.json');
 const DESKTOP_AGENT_DIR = join(homedir(), 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions');
-const CACHE_FILE = join(CLAUDE_DIR, 'stats-cache.json');
-const CACHE_VERSION = 2;
+// CLAUDE_STATS_OUT : écrire ailleurs (tests) sans toucher au cache lu par l'app.
+const CACHE_FILE = process.env.CLAUDE_STATS_OUT || join(CLAUDE_DIR, 'stats-cache.json');
+// v3 (2026-09-23) : dailyModelTokens = input + cache_creation + output
+// (intensité : tout ce qui entre neuf dans le modèle, sans les relectures de
+// cache) au lieu de input + output ; ajout du coût équivalent API (USD).
+const CACHE_VERSION = 3;
+
+// ── Tarifs API (USD / million de tokens) ───────────────────────────
+// Source : platform.claude.com/docs/en/about-claude/pricing, relevé le
+// 2026-09-23. SOURCE UNIQUE : la table est recopiée dans stats-cache.json
+// (champ `pricing`), où l'app la lit pour chiffrer le compteur live.
+// Ordre significatif : le 1er motif contenu dans l'id du modèle l'emporte
+// (opus-5-5 avant opus-5, fable-5-1 avant fable-5).
+const PRICING = [
+  ['fable-5-1',  { input: 10,  write5m: 12.5,  write1h: 20,  read: 0.25, output: 50 }],
+  ['mythos-5-1', { input: 10,  write5m: 12.5,  write1h: 20,  read: 0.25, output: 50 }],
+  ['fable-5',    { input: 10,  write5m: 12.5,  write1h: 20,  read: 1,    output: 50 }],
+  ['mythos-5',   { input: 10,  write5m: 12.5,  write1h: 20,  read: 1,    output: 50 }],
+  ['opus-5-5',   { input: 4,   write5m: 5,     write1h: 8,   read: 0.2,  output: 20 }],
+  ['opus-5',     { input: 5,   write5m: 6.25,  write1h: 10,  read: 0.5,  output: 25 }],
+  ['opus-4-8',   { input: 5,   write5m: 6.25,  write1h: 10,  read: 0.5,  output: 25 }],
+  ['opus-4-7',   { input: 5,   write5m: 6.25,  write1h: 10,  read: 0.5,  output: 25 }],
+  ['opus-4-6',   { input: 5,   write5m: 6.25,  write1h: 10,  read: 0.5,  output: 25 }],
+  ['opus-4-5',   { input: 5,   write5m: 6.25,  write1h: 10,  read: 0.5,  output: 25 }],
+  ['opus-4',     { input: 15,  write5m: 18.75, write1h: 30,  read: 1.5,  output: 75 }],
+  ['sonnet-5',   { input: 2,   write5m: 2.5,   write1h: 4,   read: 0.2,  output: 10 }],
+  ['sonnet-4',   { input: 3,   write5m: 3.75,  write1h: 6,   read: 0.3,  output: 15 }],
+  ['haiku-4-5',  { input: 1,   write5m: 1.25,  write1h: 2,   read: 0.1,  output: 5 }],
+  ['haiku-3-5',  { input: 0.8, write5m: 1,     write1h: 1.6, read: 0.08, output: 4 }],
+];
+const WEB_SEARCH_USD = 10 / 1000;
+const unpricedModels = new Set();
+
+function priceFor(model) {
+  for (const [pattern, p] of PRICING) if (model.includes(pattern)) return p;
+  if (model !== '<synthetic>') unpricedModels.add(model);
+  return null;
+}
+
+// Coût USD d'un bloc usage. `outputOnly` : ligne ultérieure d'un même
+// message.id, dont seul le delta d'output est neuf.
+function usageCost(model, usage, outputTokens, outputOnly) {
+  const p = priceFor(model);
+  if (!p) return 0;
+  // Fast mode : tarif ×2 sur toutes les catégories (Opus 5.5 / 5 / 4.8).
+  const k = usage.speed === 'fast' ? 2 : 1;
+  let usd = outputTokens * p.output;
+  if (!outputOnly) {
+    const cc = usage.cache_creation_input_tokens || 0;
+    // Répartition par TTL ; absente sur les très vieux transcripts → 5 min.
+    const w1h = usage.cache_creation?.ephemeral_1h_input_tokens || 0;
+    const w5m = Math.max(0, cc - w1h);
+    usd += (usage.input_tokens || 0) * p.input
+         + w5m * p.write5m + w1h * p.write1h
+         + (usage.cache_read_input_tokens || 0) * p.read;
+    usd += (usage.server_tool_use?.web_search_requests || 0) * WEB_SEARCH_USD * 1e6;
+  }
+  return usd * k / 1e6;
+}
 
 // ── Découverte des fichiers de session ─────────────────────────────
 
@@ -139,6 +196,9 @@ function computeStats(files) {
   // `content` restent comptés par ligne (toolCallCount). Clé = message.id,
   // fallback (sessionId, timestamp). Valeur = output_tokens déjà comptabilisé.
   const seenUsage = new Map();
+  // Par jour, sur les transcripts scannés : input+output, écritures de cache
+  // et coût — ratios servant à estimer au prorata le snapshot VM (sans cache).
+  const dayProfile = new Map();
 
   for (const file of files) {
     const entries = parseSessionFile(file);
@@ -184,21 +244,29 @@ function computeStats(files) {
       // Lignes suivantes (output plus grand) : n'ajouter que le delta d'output.
       const firstSeen = prevOut === undefined;
       const addedInput = firstSeen ? (usage.input_tokens || 0) : 0;
+      const addedCacheCreation = firstSeen ? (usage.cache_creation_input_tokens || 0) : 0;
       const addedOutput = firstSeen ? out : out - prevOut;
       if (firstSeen) {
         mu.cacheReadInputTokens += usage.cache_read_input_tokens || 0;
-        mu.cacheCreationInputTokens += usage.cache_creation_input_tokens || 0;
+        mu.cacheCreationInputTokens += addedCacheCreation;
+        mu.webSearchRequests += usage.server_tool_use?.web_search_requests || 0;
       }
       mu.inputTokens += addedInput;
       mu.outputTokens += addedOutput;
+      const addedCost = usageCost(model, usage, addedOutput, !firstSeen);
+      mu.costUSD += addedCost;
       seenUsage.set(key, out);
 
-      const addedTotal = addedInput + addedOutput;
-      if (addedTotal > 0) {
-        const msgDay = msgDate.toISOString().split('T')[0];
-        const dayTokens = dailyModelTokens.get(msgDay) || {};
-        dayTokens[model] = (dayTokens[model] || 0) + addedTotal;
-        dailyModelTokens.set(msgDay, dayTokens);
+      // Intensité : input + écritures de cache + output (lectures exclues).
+      const addedTotal = addedInput + addedCacheCreation + addedOutput;
+      if (addedTotal > 0 || addedCost > 0) {
+        const day = msgDate.toISOString().split('T')[0];
+        addDay(dailyModelTokens, day, model, addedTotal, addedCost);
+        const prof = dayProfile.get(day) || { io: 0, cacheCreation: 0, cost: 0 };
+        prof.io += addedInput + addedOutput;
+        prof.cacheCreation += addedCacheCreation;
+        prof.cost += addedCost;
+        dayProfile.set(day, prof);
       }
     }
 
@@ -247,7 +315,7 @@ function computeStats(files) {
   // distingue pas tours principaux et sidechains, donc sessions/messages/
   // heures restent basés sur les seuls transcripts.
   const scannedSids = new Set(files.map(f => basename(f, '.jsonl')));
-  const vmSnapshot = ingestVmSnapshot(scannedSids, modelUsage, dailyModelTokens);
+  const vmSnapshot = ingestVmSnapshot(scannedSids, modelUsage, dailyModelTokens, dayProfile);
 
   // Jours présents uniquement via des tokens subagents/workflows (sessions
   // principales purgées) : créer une entrée d'activité vide pour que la
@@ -264,9 +332,18 @@ function computeStats(files) {
     lastComputedDate: new Date().toISOString().split('T')[0],
     dailyActivity: [...dailyActivity.values()].sort((a, b) => a.date.localeCompare(b.date)),
     dailyModelTokens: [...dailyModelTokens.entries()]
-      .map(([date, tokensByModel]) => ({ date, tokensByModel }))
+      .map(([date, d]) => ({ date, tokensByModel: d.tokensByModel, costUSD: round2(d.costUSD) }))
       .sort((a, b) => a.date.localeCompare(b.date)),
-    modelUsage,
+    modelUsage: Object.fromEntries(Object.entries(modelUsage)
+      .map(([m, u]) => [m, { ...u, costUSD: round2(u.costUSD) }])),
+    totalCostUSD: round2(Object.values(modelUsage).reduce((s, u) => s + u.costUSD, 0)),
+    tokenMetric: 'input+cacheCreation+output',
+    pricing: {
+      source: 'platform.claude.com/docs/en/about-claude/pricing (2026-09-23)',
+      webSearchUSD: WEB_SEARCH_USD,
+      models: PRICING.map(([match, p]) => ({ match, ...p })),
+    },
+    unpricedModels: [...unpricedModels],
     totalSessions,
     totalMessages,
     longestSession,
@@ -278,9 +355,24 @@ function computeStats(files) {
   };
 }
 
+function addDay(dailyModelTokens, day, model, tokens, cost) {
+  const d = dailyModelTokens.get(day) || { tokensByModel: {}, costUSD: 0 };
+  d.tokensByModel[model] = (d.tokensByModel[model] || 0) + tokens;
+  d.costUSD += cost;
+  dailyModelTokens.set(day, d);
+}
+
+const round2 = x => Math.round(x * 100) / 100;
+
 // ── Ingestion du snapshot d'usage VM ───────────────────────────────
 
-function ingestVmSnapshot(scannedSids, modelUsage, dailyModelTokens) {
+// Le snapshot ne porte que input/output : écritures de cache et coût sont
+// estimés au prorata du profil des transcripts scannés le MÊME jour UTC
+// (même époque de modèles et d'usage), repli sur le profil agrégé de toute la
+// période du snapshot pour les jours trop maigres. Estimation, pas mesure.
+const PROFILE_MIN_IO = 100_000;
+
+function ingestVmSnapshot(scannedSids, modelUsage, dailyModelTokens, dayProfile) {
   if (!existsSync(VM_SNAPSHOT_FILE)) return null;
   let snap;
   try {
@@ -294,9 +386,28 @@ function ingestVmSnapshot(scannedSids, modelUsage, dailyModelTokens) {
     return null;
   }
 
+  // Profil global sur les jours couverts par le snapshot (repli).
+  const snapDays = new Set();
+  for (const e of snap.events) {
+    const d = new Date(e?.ts);
+    if (!isNaN(d.getTime())) snapDays.add(d.toISOString().split('T')[0]);
+  }
+  const global = { io: 0, cacheCreation: 0, cost: 0 };
+  for (const day of snapDays) {
+    const p = dayProfile.get(day);
+    if (p) { global.io += p.io; global.cacheCreation += p.cacheCreation; global.cost += p.cost; }
+  }
+  const ratios = day => {
+    const p = dayProfile.get(day);
+    const src = p && p.io >= PROFILE_MIN_IO ? p : global;
+    return src.io > 0 ? { cc: src.cacheCreation / src.io, cost: src.cost / src.io } : { cc: 0, cost: 0 };
+  };
+
   const ingestedSids = new Set();
   let events = 0;
   let tokens = 0;
+  let estimatedCacheCreation = 0;
+  let estimatedCostUSD = 0;
   for (const e of snap.events) {
     if (!e || typeof e.sid !== 'string' || scannedSids.has(e.sid)) continue;
     const date = new Date(e.ts);
@@ -316,19 +427,27 @@ function ingestVmSnapshot(scannedSids, modelUsage, dailyModelTokens) {
         contextWindow: 0, maxOutputTokens: 0
       };
     }
+    const day = date.toISOString().split('T')[0];
+    const r = ratios(day);
+    const cacheCreation = Math.round((input + output) * r.cc);
+    const cost = (input + output) * r.cost;
     modelUsage[model].inputTokens += input;
     modelUsage[model].outputTokens += output;
+    modelUsage[model].cacheCreationInputTokens += cacheCreation;
+    modelUsage[model].costUSD += cost;
 
-    const day = date.toISOString().split('T')[0];
-    const dayTokens = dailyModelTokens.get(day) || {};
-    dayTokens[model] = (dayTokens[model] || 0) + input + output;
-    dailyModelTokens.set(day, dayTokens);
+    addDay(dailyModelTokens, day, model, input + output + cacheCreation, cost);
+    estimatedCacheCreation += cacheCreation;
+    estimatedCostUSD += cost;
 
     ingestedSids.add(e.sid);
     events++;
     tokens += input + output;
   }
-  return { sessions: ingestedSids.size, events, tokens };
+  return {
+    sessions: ingestedSids.size, events, tokens,
+    estimatedCacheCreation, estimatedCostUSD: round2(estimatedCostUSD),
+  };
 }
 
 // ── Cache I/O ──────────────────────────────────────────────────────
@@ -356,6 +475,9 @@ if (files.length === 0) {
 const cache = computeStats(files);
 saveCacheToFile(cache, CACHE_FILE);
 const snapInfo = cache.vmSnapshotIngested
-  ? `, snapshot VM: +${cache.vmSnapshotIngested.sessions} sids purgés / ${(cache.vmSnapshotIngested.tokens / 1e6).toFixed(2)}M tokens`
+  ? `, snapshot VM: +${cache.vmSnapshotIngested.sessions} sids purgés / ${(cache.vmSnapshotIngested.tokens / 1e6).toFixed(2)}M tokens (≈ ${cache.vmSnapshotIngested.estimatedCostUSD.toFixed(0)} $ estimés)`
   : '';
-console.log(`→ ${cache.totalSessions} sessions, ${cache.totalMessages} messages, lastComputedDate: ${cache.lastComputedDate}${snapInfo}`);
+if (cache.unpricedModels.length) {
+  console.error(`Modèles sans tarif (coût compté 0) : ${cache.unpricedModels.join(', ')}`);
+}
+console.log(`→ ${cache.totalSessions} sessions, ${cache.totalMessages} messages, coût API ≈ ${cache.totalCostUSD.toFixed(0)} $, lastComputedDate: ${cache.lastComputedDate}${snapInfo}`);
