@@ -158,6 +158,8 @@ struct NotchWingsView: View {
     @AppStorage("wingsFontSize") private var fontSizeRaw: Double = 10
     /// Panneau all-time : affichage par jour (false) ou par mois (true).
     @AppStorage("allTimeCostMonthly") private var allTimeMonthly: Bool = false
+    /// Record : jour au plus de tokens (false) ou au coût API le plus élevé (true).
+    @AppStorage("recordByCost") private var recordByCost: Bool = false
     @AppStorage("wingsElements") private var wingsElementsData: Data = {
         (try? JSONEncoder().encode(WingElement.defaultElements)) ?? Data()
     }()
@@ -405,9 +407,12 @@ struct NotchWingsView: View {
             }
         case "record":
             if let st = stats, st.recordTokens > 0 {
+                let rec = st.record(byCost: recordByCost)
                 HStack(spacing: 2) {
                     Text("🏆").font(.system(size: fontSize - 3))
-                    Text(formatShortDate(st.recordDate) + " " + formatTokens(st.recordTokens) + " · " + formatEuros(st.recordCostUSD))
+                    Text(recordByCost
+                         ? formatShortDate(rec.date) + " " + formatEuros(rec.costUSD) + " · " + formatTokens(rec.tokens)
+                         : formatShortDate(rec.date) + " " + formatTokens(rec.tokens) + " · " + formatEuros(rec.costUSD))
                         .font(smallFont)
                 }
                 .foregroundColor(TerminalColors.amber.opacity(0.7))
@@ -608,7 +613,7 @@ struct NotchWingsView: View {
                 }
                 DetailActivityHeatmap(
                     entries: st.heatmapEntries,
-                    recordDate: parseDate(st.recordDate),
+                    recordDate: parseDate(st.record(byCost: recordByCost).date),
                     cellSize: 8,
                     cellGap: 1.5
                 )
@@ -796,7 +801,8 @@ struct NotchWingsView: View {
         let days = st.last7Days
         let maxTokens = days.map(\.tokens).max() ?? 0
         let minTokens = days.map(\.tokens).min() ?? 0
-        let hasRecord = days.contains { $0.date == st.recordDate }
+        let recordDay = st.record(byCost: recordByCost).date
+        let hasRecord = days.contains { $0.date == recordDay }
 
         return VStack(alignment: .leading, spacing: 0) {
             if !days.isEmpty {
@@ -832,7 +838,7 @@ struct NotchWingsView: View {
                         let wd = Calendar.current.component(.weekday, from: d)
                         return wd == 1 || wd == 7
                     }()
-                    let isRecord = entry.date == st.recordDate
+                    let isRecord = entry.date == recordDay
                     let rowColor: Color = {
                         if isRecord { return TerminalColors.amber.opacity(isWeekendRow ? 0.7 : 0.9) }
                         if maxTokens != minTokens {
@@ -889,7 +895,15 @@ struct NotchWingsView: View {
 
     private func recordDetail(_ st: DailyStats) -> some View {
         let todayTokens = st.todayLiveTokens > 0 ? st.todayLiveTokens : st.totalTokens
-        let pctOfRecord = st.recordTokens > 0 ? Double(todayTokens) / Double(st.recordTokens) * 100 : 0
+        let byTokens = st.record(byCost: false)
+        let byCost = st.record(byCost: true)
+        let rec = recordByCost ? byCost : byTokens
+        let other = recordByCost ? byTokens : byCost
+        let pctOfRecord: Double = recordByCost
+            ? (rec.costUSD > 0 ? st.todayCostUSD / rec.costUSD * 100 : 0)
+            : (rec.tokens > 0 ? Double(todayTokens) / Double(rec.tokens) * 100 : 0)
+        let highlight = TerminalColors.amber.opacity(0.9)
+        let dim = TerminalColors.amber.opacity(0.6)
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 4) {
@@ -897,34 +911,68 @@ struct NotchWingsView: View {
                 Text("Record")
                     .font(.system(size: fontSize, weight: .bold, design: .monospaced))
                     .foregroundColor(TerminalColors.amber.opacity(0.9))
+                Spacer(minLength: 12)
+                recordMetricToggle
             }
 
             HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Date").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text(formatShortDate(st.recordDate))
-                        .font(boldFont).foregroundColor(TerminalColors.amber.opacity(0.7))
+                    Text(formatShortDate(rec.date))
+                        .font(boldFont).foregroundColor(dim)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Tokens").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text(formatTokens(st.recordTokens))
-                        .font(boldFont).foregroundColor(TerminalColors.amber.opacity(0.7))
+                    Text(formatTokens(rec.tokens))
+                        .font(boldFont).foregroundColor(recordByCost ? dim : highlight)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Coût API").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text(formatEuros(st.recordCostUSD))
-                        .font(boldFont).foregroundColor(TerminalColors.amber.opacity(0.7))
+                    Text(formatEuros(rec.costUSD))
+                        .font(boldFont).foregroundColor(recordByCost ? highlight : dim)
                 }
             }
 
-            if st.isToday {
-                Text("Aujourd'hui : \(formatTokens(todayTokens)) (\(Int(pctOfRecord))% du record)")
+            // L'autre record, s'il tombe un autre jour
+            if other.date != rec.date, !other.date.isEmpty {
+                Text("Record \(recordByCost ? "tokens" : "coût") : \(formatShortDate(other.date)) · \(formatTokens(other.tokens)) · \(formatEuros(other.costUSD))")
+                    .font(smallFont).foregroundColor(.white.opacity(0.4))
+            }
+
+            if st.isToday, rec.date == st.date {
+                Text("🎉 Nouveau record !")
+                    .font(boldFont).foregroundColor(highlight)
+            } else if st.isToday {
+                Text(recordByCost
+                     ? "Aujourd'hui : \(formatEuros(st.todayCostUSD)) (\(Int(pctOfRecord))% du record)"
+                     : "Aujourd'hui : \(formatTokens(todayTokens)) (\(Int(pctOfRecord))% du record)")
                     .font(smallFont).foregroundColor(.white.opacity(0.5))
             }
         }
+        // Largeur au contenu : sans ça le Spacer du titre étire le panneau
+        .fixedSize(horizontal: true, vertical: false)
         .padding(10)
         .background(wingBackground)
         .clipShape(RoundedRectangle(cornerRadius: wingCornerRadius))
+    }
+
+    /// Bascule tokens / coût du record (mémorisée, pilote aussi la barre).
+    private var recordMetricToggle: some View {
+        HStack(spacing: 0) {
+            ForEach([false, true], id: \.self) { isCost in
+                let selected = recordByCost == isCost
+                Text(isCost ? "€" : "tokens")
+                    .font(smallFont)
+                    .foregroundColor(.white.opacity(selected ? 0.85 : 0.35))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(.white.opacity(selected ? 0.15 : 0)))
+                    .contentShape(Rectangle())
+                    .onTapGesture { recordByCost = isCost }
+            }
+        }
+        .padding(1)
+        .background(RoundedRectangle(cornerRadius: 5).stroke(.white.opacity(0.15), lineWidth: 1))
     }
 
     // MARK: - Rate Limit Pill

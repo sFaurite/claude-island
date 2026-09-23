@@ -68,6 +68,10 @@ struct DailyStats: Sendable {
     let recordDate: String    // day with most tokens
     let recordTokens: Int
     let recordCostUSD: Double
+    // Record en coût API (jour le plus cher) — peut différer du record en tokens
+    let costRecordDate: String
+    let costRecordTokens: Int
+    let costRecordCostUSD: Double
     let date: String
     let isToday: Bool
     let heatmapEntries: [HeatmapEntry]
@@ -84,6 +88,13 @@ struct DailyStats: Sendable {
     /// Durée de l'historique en mois (du 1er jour à maintenant, 30,44 j/mois).
     let monthsOfHistory: Double
     let last7Days: [DayHistoryEntry]
+
+    /// Record selon la métrique choisie (tokens ou coût API).
+    func record(byCost: Bool) -> (date: String, tokens: Int, costUSD: Double) {
+        byCost
+            ? (costRecordDate, costRecordTokens, costRecordCostUSD)
+            : (recordDate, recordTokens, recordCostUSD)
+    }
 }
 
 struct StatsReader: Sendable {
@@ -192,6 +203,19 @@ struct StatsReader: Sendable {
         }
         let recCost = recDate == today ? todayCost : (costByDate[recDate] ?? 0)
 
+        // Record day by API cost (today at its live cost)
+        var costRecDate = ""
+        var costRecCost = 0.0
+        for (d, cost) in costByDate where d != today && cost > costRecCost {
+            costRecCost = cost
+            costRecDate = d
+        }
+        if todayCost > costRecCost {
+            costRecCost = todayCost
+            costRecDate = today
+        }
+        let costRecTokens = tokensByDate[costRecDate] ?? 0
+
         // Last non-empty day excluding today
         let lastDay = cache.dailyActivity
             .filter { $0.date != today && $0.messageCount > 0 }
@@ -238,6 +262,9 @@ struct StatsReader: Sendable {
             recordDate: recDate,
             recordTokens: recTokens,
             recordCostUSD: recCost,
+            costRecordDate: costRecDate,
+            costRecordTokens: costRecTokens,
+            costRecordCostUSD: costRecCost,
             date: date,
             isToday: isToday,
             heatmapEntries: heatmap,
