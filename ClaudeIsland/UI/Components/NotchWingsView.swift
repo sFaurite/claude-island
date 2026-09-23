@@ -156,6 +156,8 @@ struct NotchWingsView: View {
 
     @AppStorage("wingsLayout") private var wingsLayoutRaw: String = WingsLayout.both.rawValue
     @AppStorage("wingsFontSize") private var fontSizeRaw: Double = 10
+    /// Panneau all-time : affichage par jour (false) ou par mois (true).
+    @AppStorage("allTimeCostMonthly") private var allTimeMonthly: Bool = false
     @AppStorage("wingsElements") private var wingsElementsData: Data = {
         (try? JSONEncoder().encode(WingElement.defaultElements)) ?? Data()
     }()
@@ -620,15 +622,24 @@ struct NotchWingsView: View {
 
     private func tokensAllTimeDetail(_ st: DailyStats) -> some View {
         let dayCount = max(1, st.heatmapEntries.count)
-        let avgPerDay = st.totalTokensAllTime / dayCount
+        let monthly = allTimeMonthly
+        // Par jour : moyenne sur les jours d'activité ; par mois : sur la durée
+        // de l'historique en mois (30,44 j).
+        let divisor = monthly ? st.monthsOfHistory : Double(dayCount)
+        let avgTokens = Int(Double(st.totalTokensAllTime) / divisor)
+        let unit = monthly ? "mois" : "jour"
 
         // Largeur fixe (graphe + légende sur une ligne) ; le haut se répartit dessus.
         let panelWidth = allTimePanelWidth
 
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Tokens — All Time")
-                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.7))
+            HStack {
+                Text("Tokens — All Time")
+                    .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.7))
+                Spacer()
+                periodToggle
+            }
 
             HStack(alignment: .top, spacing: 0) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -638,8 +649,8 @@ struct NotchWingsView: View {
                 }
                 Spacer(minLength: 12)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Moy/jour").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text("~" + formatTokens(avgPerDay))
+                    Text("Moy/\(unit)").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("~" + formatTokens(avgTokens))
                         .font(boldFont).foregroundColor(.white.opacity(0.6))
                 }
                 Spacer(minLength: 12)
@@ -650,8 +661,8 @@ struct NotchWingsView: View {
                 }
                 Spacer(minLength: 12)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("€/jour").font(smallFont).foregroundColor(.white.opacity(0.4))
-                    Text("~" + formatEuros(st.totalCostAllTimeUSD / Double(dayCount)))
+                    Text("€/\(unit)").font(smallFont).foregroundColor(.white.opacity(0.4))
+                    Text("~" + formatEuros(st.totalCostAllTimeUSD / divisor))
                         .font(boldFont).foregroundColor(.white.opacity(0.6))
                 }
             }
@@ -664,9 +675,13 @@ struct NotchWingsView: View {
                     .font(smallFont).foregroundColor(.white.opacity(0.4))
             }
 
-            workdayProjection(st.workdayCostAverages)
+            workdayProjection(st.workdayCostAverages, monthly: monthly)
 
-            if st.workdayCostTrend.count > 1 {
+            if monthly {
+                if !st.monthlyCosts.isEmpty {
+                    MonthlyCostChart(months: st.monthlyCosts, fontSize: fontSize)
+                }
+            } else if st.workdayCostTrend.count > 1 {
                 WorkdayCostChart(points: st.workdayCostTrend, fontSize: fontSize)
             }
         }
@@ -679,15 +694,16 @@ struct NotchWingsView: View {
     /// « Conso moyenne » glissante, comme l'autonomie projetée d'un véhicule
     /// électrique : coût par jour ouvré actif et projection sur un ETP (200 j/an).
     @ViewBuilder
-    private func workdayProjection(_ averages: [WorkdayCostAverage]) -> some View {
+    /// En mode mois : même moyenne convertie en mois d'ETP (200 j / 12 ≈ 16,7 j ouvrés).
+    private func workdayProjection(_ averages: [WorkdayCostAverage], monthly: Bool) -> some View {
         if !averages.isEmpty {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Projection — par jour ouvré actif")
+                Text(monthly ? "Projection — par mois d'ETP (200 j/an)" : "Projection — par jour ouvré actif")
                     .font(boldFont).foregroundColor(.white.opacity(0.6))
                     .padding(.bottom, 1)
                 HStack(spacing: 0) {
                     Text("Période").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("€/j ouvré").frame(maxWidth: .infinity, alignment: .trailing)
+                    Text(monthly ? "€/mois ETP" : "€/j ouvré").frame(maxWidth: .infinity, alignment: .trailing)
                     Text("ETP/an").frame(maxWidth: .infinity, alignment: .trailing)
                     Text("Jours").frame(maxWidth: .infinity, alignment: .trailing)
                 }
@@ -697,7 +713,8 @@ struct NotchWingsView: View {
                     HStack(spacing: 0) {
                         Text(avg.label).frame(maxWidth: .infinity, alignment: .leading)
                             .foregroundColor(.white.opacity(0.5))
-                        Text(formatEuros(avg.perWorkdayUSD)).frame(maxWidth: .infinity, alignment: .trailing)
+                        Text(formatEuros(monthly ? avg.perFTEYearUSD / 12 : avg.perWorkdayUSD))
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                             .foregroundColor(.white.opacity(0.7))
                         Text(formatEuros(avg.perFTEYearUSD)).frame(maxWidth: .infinity, alignment: .trailing)
                             .foregroundColor(TerminalColors.amber.opacity(0.8))
@@ -708,6 +725,25 @@ struct NotchWingsView: View {
                 }
             }
         }
+    }
+
+    /// Bascule jour / mois du panneau all-time (mémorisée).
+    private var periodToggle: some View {
+        HStack(spacing: 0) {
+            ForEach([false, true], id: \.self) { isMonthly in
+                let selected = allTimeMonthly == isMonthly
+                Text(isMonthly ? "mois" : "jour")
+                    .font(smallFont)
+                    .foregroundColor(.white.opacity(selected ? 0.85 : 0.35))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(.white.opacity(selected ? 0.15 : 0)))
+                    .contentShape(Rectangle())
+                    .onTapGesture { allTimeMonthly = isMonthly }
+            }
+        }
+        .padding(1)
+        .background(RoundedRectangle(cornerRadius: 5).stroke(.white.opacity(0.15), lineWidth: 1))
     }
 
     /// Largeur du panneau all-time : de quoi tenir la légende du graphe sur une

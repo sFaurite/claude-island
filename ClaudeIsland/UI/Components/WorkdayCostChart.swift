@@ -140,6 +140,7 @@ struct WorkdayCostChart: View {
                 }
             }
             .frame(height: 90)
+            .environment(\.locale, Locale(identifier: "fr_FR"))  // mois de l'axe en français
 
             Text("€ par jour ouvré actif · ETP = ×200")
                 .font(.system(size: fontSize - 2, design: .monospaced))

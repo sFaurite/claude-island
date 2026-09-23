@@ -45,6 +45,14 @@ struct WorkdayCostPoint: Sendable {
     let d30USD: Double?
 }
 
+/// Coût réel d'un mois calendaire (UTC). Le mois en cours porte une projection
+/// de fin de mois au prorata du temps écoulé.
+struct MonthCost: Sendable {
+    let month: Date           // 1er du mois, 00:00 UTC
+    let costUSD: Double
+    let projectedUSD: Double? // mois en cours uniquement
+}
+
 struct DailyStats: Sendable {
     let messageCount: Int
     let sessionCount: Int
@@ -72,6 +80,9 @@ struct DailyStats: Sendable {
     let lastDayCostUSD: Double
     let workdayCostAverages: [WorkdayCostAverage]
     let workdayCostTrend: [WorkdayCostPoint]
+    let monthlyCosts: [MonthCost]
+    /// Durée de l'historique en mois (du 1er jour à maintenant, 30,44 j/mois).
+    let monthsOfHistory: Double
     let last7Days: [DayHistoryEntry]
 }
 
@@ -206,6 +217,12 @@ struct StatsReader: Sendable {
 
         let workdayAverages = Self.workdayCostAverages(costByDate: costByDate, today: today)
         let workdayTrend = Self.workdayCostTrend(costByDate: costByDate, today: today)
+        // Aujourd'hui au coût live (plus frais que le cache horaire)
+        var costWithToday = costByDate
+        costWithToday[today] = todayCost
+        let monthly = Self.monthlyCosts(costByDate: costWithToday, now: Date())
+        let firstDay = costByDate.keys.min().flatMap { utcDateFormatter.date(from: $0) }
+        let months = firstDay.map { max(1 / 30.44, Date().timeIntervalSince($0) / 86400 / 30.44) } ?? 1
 
         return DailyStats(
             messageCount: activity?.messageCount ?? 0,
@@ -232,6 +249,8 @@ struct StatsReader: Sendable {
             lastDayCostUSD: lastDay.flatMap { costByDate[$0.date] } ?? 0,
             workdayCostAverages: workdayAverages,
             workdayCostTrend: workdayTrend,
+            monthlyCosts: monthly,
+            monthsOfHistory: months,
             last7Days: last7Days
         )
     }
@@ -262,6 +281,27 @@ extension StatsReader {
                                       workdays: workdays)
         }
         return [average(label: "Total", days: nil), average(label: "90 j", days: 90), average(label: "30 j", days: 30)]
+    }
+
+    /// Coûts réels par mois calendaire UTC, du plus ancien au mois en cours.
+    /// Projection du mois en cours = coût à date ÷ fraction du mois écoulée.
+    static func monthlyCosts(costByDate: [String: Double], now: Date) -> [MonthCost] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        var byMonth: [Date: Double] = [:]
+        for (key, usd) in costByDate {
+            guard let date = utcDateFormatter.date(from: key),
+                  let month = calendar.dateInterval(of: .month, for: date)?.start else { continue }
+            byMonth[month, default: 0] += usd
+        }
+        guard let current = calendar.dateInterval(of: .month, for: now) else { return [] }
+        let elapsed = now.timeIntervalSince(current.start) / current.duration
+        return byMonth.keys.sorted().map { month in
+            let usd = byMonth[month] ?? 0
+            let isCurrent = month == current.start
+            return MonthCost(month: month, costUSD: usd,
+                             projectedUSD: isCurrent && elapsed > 0 ? usd / elapsed : nil)
+        }
     }
 
     /// Série quotidienne des mêmes moyennes (dernier point = tableau), du premier
