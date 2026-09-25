@@ -786,10 +786,17 @@ struct NotchWingsView: View {
                 }
             }
 
-            if st.recordTokens > 0 {
-                let pct = Double(todayTokens) / Double(st.recordTokens) * 100
-                Text("\(Int(pct))% du record (\(formatTokens(st.recordTokens)))")
-                    .font(smallFont).foregroundColor(.white.opacity(0.4))
+            VStack(alignment: .leading, spacing: 2) {
+                if st.recordTokens > 0 {
+                    let pct = Double(todayTokens) / Double(st.recordTokens) * 100
+                    Text("\(Int(pct))% du record (\(formatTokens(st.recordTokens)))")
+                        .font(smallFont).foregroundColor(.white.opacity(0.4))
+                }
+                if st.costRecordCostUSD > 0 {
+                    let pct = st.todayCostUSD / st.costRecordCostUSD * 100
+                    Text("\(Int(pct))% du record en coût (\(formatEuros(st.costRecordCostUSD)))")
+                        .font(smallFont).foregroundColor(.white.opacity(0.4))
+                }
             }
         }
         .padding(10)
