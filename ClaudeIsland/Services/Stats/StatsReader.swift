@@ -12,6 +12,7 @@ struct HeatmapEntry: Sendable {
     let date: Date
     let messageCount: Int
     let tokenCount: Int
+    let costUSD: Double
 }
 
 struct DayHistoryEntry: Sendable {
@@ -179,7 +180,9 @@ struct StatsReader: Sendable {
         // Heatmap entries from dailyActivity
         let heatmap = cache.dailyActivity.compactMap { entry -> HeatmapEntry? in
             guard let d = dateFormatter.date(from: entry.date) else { return nil }
-            return HeatmapEntry(date: d, messageCount: entry.messageCount, tokenCount: tokensByDate[entry.date] ?? 0)
+            let cost = entry.date == today ? todayCost : (costByDate[entry.date] ?? 0)
+            return HeatmapEntry(date: d, messageCount: entry.messageCount,
+                                tokenCount: tokensByDate[entry.date] ?? 0, costUSD: cost)
         }
 
         // All-time = cache total + any live tokens beyond what cache already knows for today

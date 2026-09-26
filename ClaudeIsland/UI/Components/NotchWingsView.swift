@@ -375,7 +375,7 @@ struct NotchWingsView: View {
             }
         case "heatmap":
             if let st = stats {
-                ActivityHeatmap(entries: st.heatmapEntries)
+                ActivityHeatmap(entries: st.heatmapEntries, byCost: recordByCost)
                     .contentShape(Rectangle())
                     .onTapGesture { toggleSection(.heatmap) }
             }
@@ -598,9 +598,13 @@ struct NotchWingsView: View {
 
     private func heatmapDetail(_ st: DailyStats) -> some View {
         VStack(spacing: 8) {
-            Text("Activité")
-                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.7))
+            HStack {
+                Text("Activité")
+                    .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.7))
+                Spacer()
+                recordMetricToggle
+            }
 
             HStack(alignment: .top, spacing: 4) {
                 VStack(spacing: 1.5) {
@@ -614,6 +618,7 @@ struct NotchWingsView: View {
                 DetailActivityHeatmap(
                     entries: st.heatmapEntries,
                     recordDate: parseDate(st.record(byCost: recordByCost).date),
+                    byCost: recordByCost,
                     cellSize: 8,
                     cellGap: 1.5
                 )
@@ -1210,7 +1215,9 @@ struct NotchWingsView: View {
         guard let highest = bounds.last else { return colorForUtilization(util) }
         if util > highest { return TerminalColors.red }
         switch bounds.filter({ util > $0 }).count {
-        case 0: return colorForUtilization(util)
+        // Sous tous les attendus : vert, comme « ✓ Sous le rythme attendu »
+        // (les seuils absolus 50/80 % donnaient de l'ambre à 56 % sous le rythme).
+        case 0: return TerminalColors.green
         case 1 where bounds.count >= 3: return TerminalColors.yellow
         default: return TerminalColors.orange
         }
@@ -1328,12 +1335,14 @@ struct NotchWingsView: View {
 
 private struct ActivityHeatmap: View {
     let entries: [HeatmapEntry]
+    /// Intensité pilotée par le coût (€) plutôt que les tokens.
+    var byCost: Bool = false
     var cellSize: CGFloat = 3
     var cellGap: CGFloat = 1
 
     var body: some View {
         let grid = buildGrid()
-        let maxCount = entries.map(\.tokenCount).max() ?? 1
+        let maxValue = entries.map(metric).max() ?? 1
         let p75 = percentile75()
         let step = cellSize + cellGap
 
@@ -1343,10 +1352,10 @@ private struct ActivityHeatmap: View {
                     let x = CGFloat(col) * step
                     let y = CGFloat(row) * step
                     let rect = CGRect(x: x, y: y, width: cellSize, height: cellSize)
-                    let count = grid[col][row]
+                    let value = grid[col][row]
                     context.fill(
                         RoundedRectangle(cornerRadius: cellSize > 4 ? 1 : 0.5).path(in: rect),
-                        with: .color(colorForCount(count, max: maxCount, p75: p75))
+                        with: .color(colorForValue(value, max: maxValue, p75: p75))
                     )
                 }
             }
@@ -1358,7 +1367,7 @@ private struct ActivityHeatmap: View {
     }
 
     /// Build a calendar grid: columns = weeks, rows = day of week (Mon=0 .. Sun=6)
-    private func buildGrid() -> [[Int]] {
+    private func buildGrid() -> [[Double]] {
         guard let firstEntry = entries.min(by: { $0.date < $1.date }),
               let lastEntry = entries.max(by: { $0.date < $1.date }) else {
             return []
@@ -1366,11 +1375,11 @@ private struct ActivityHeatmap: View {
 
         let calendar = Calendar.current
 
-        // Build lookup: day -> tokenCount
-        var lookup: [Date: Int] = [:]
+        // Build lookup: day -> métrique affichée (tokens ou coût)
+        var lookup: [Date: Double] = [:]
         for entry in entries {
             let day = calendar.startOfDay(for: entry.date)
-            lookup[day] = entry.tokenCount
+            lookup[day] = metric(entry)
         }
 
         // Find the Monday on or before the first entry
@@ -1380,11 +1389,11 @@ private struct ActivityHeatmap: View {
         let startDate = calendar.date(byAdding: .day, value: -firstWeekday, to: firstDay)!
 
         // Build columns from startDate to lastDay
-        var grid: [[Int]] = []
+        var grid: [[Double]] = []
         var current = startDate
 
         while current <= lastDay {
-            var column = [Int](repeating: 0, count: 7)
+            var column = [Double](repeating: 0, count: 7)
             for row in 0..<7 {
                 let day = calendar.date(byAdding: .day, value: row, to: current)!
                 if day >= firstDay && day <= lastDay {
@@ -1400,29 +1409,33 @@ private struct ActivityHeatmap: View {
         return grid
     }
 
-    private func percentile75() -> Int {
-        let nonZero = entries.map(\.tokenCount).filter { $0 > 0 }.sorted()
-        guard !nonZero.isEmpty else { return 1 }
-        let index = Int(Double(nonZero.count - 1) * 0.75)
-        return max(nonZero[index], 1)
+    private func metric(_ entry: HeatmapEntry) -> Double {
+        byCost ? entry.costUSD : Double(entry.tokenCount)
     }
 
-    private func colorForCount(_ count: Int, max: Int, p75: Int) -> Color {
-        if count < 0 { return .clear }
-        if count == 0 { return .white.opacity(0.06) }
+    private func percentile75() -> Double {
+        let nonZero = entries.map(metric).filter { $0 > 0 }.sorted()
+        guard !nonZero.isEmpty else { return 1 }
+        let index = Int(Double(nonZero.count - 1) * 0.75)
+        return nonZero[index]
+    }
 
-        let threshold = Double(p75)
+    private func colorForValue(_ value: Double, max: Double, p75: Double) -> Color {
+        if value < 0 { return .clear }
+        if value == 0 { return .white.opacity(0.06) }
 
-        if Double(count) <= threshold {
+        let threshold = p75
+
+        if value <= threshold {
             // Phase 1: Linear orange gradient
-            let ratio = Double(count) / threshold
+            let ratio = value / threshold
             let opacity = 0.06 + ratio * 0.94
             return TerminalColors.prompt.opacity(opacity)
         } else {
             // Phase 2: Heated metal — orange → amber → yellow → white
-            let range = Double(max) - threshold
+            let range = max - threshold
             guard range > 0 else { return .white }
-            let normalized = min((Double(count) - threshold) / range, 1.0)
+            let normalized = min((value - threshold) / range, 1.0)
             let r = 0.85 + pow(normalized, 0.2) * 0.15
             let g = 0.47 + pow(normalized, 0.45) * 0.53
             let b = 0.34 + pow(normalized, 0.9) * 0.66
@@ -1457,6 +1470,8 @@ private struct DiagonalHatching: View {
 private struct DetailActivityHeatmap: View {
     let entries: [HeatmapEntry]
     let recordDate: Date?
+    /// Intensité et info-bulle pilotées par le coût (€) plutôt que les tokens.
+    var byCost: Bool = false
     var cellSize: CGFloat = 6
     var cellGap: CGFloat = 1
 
@@ -1467,6 +1482,7 @@ private struct DetailActivityHeatmap: View {
         let date: Date
         let messageCount: Int
         let tokenCount: Int
+        let costUSD: Double
         let inRange: Bool
         let isRecord: Bool
     }
@@ -1480,7 +1496,7 @@ private struct DetailActivityHeatmap: View {
 
     var body: some View {
         let grid = buildGrid()
-        let maxCount = entries.map(\.tokenCount).max() ?? 1
+        let maxValue = entries.map(metric).max() ?? 1
         let p75 = percentile75()
         VStack(spacing: 5) {
             HStack(alignment: .top, spacing: 0) {
@@ -1489,7 +1505,7 @@ private struct DetailActivityHeatmap: View {
                         ForEach(0..<7, id: \.self) { row in
                             let cell = grid[col][row]
                             RoundedRectangle(cornerRadius: 1)
-                                .fill(colorForCell(cell, max: maxCount, p75: p75))
+                                .fill(colorForCell(cell, max: maxValue, p75: p75))
                                 .frame(width: cellSize, height: cellSize)
                                 .overlay(
                                     cell.isRecord
@@ -1551,8 +1567,25 @@ private struct DetailActivityHeatmap: View {
 
     private func cellText(for cell: Cell) -> String {
         let dateStr = Self.tooltipDateFormatter.string(from: cell.date)
-        let tokenStr = formatTokensCompact(cell.tokenCount)
-        return "\(dateStr)\n\(cell.messageCount) msgs · \(tokenStr) tokens"
+        let tokenStr = formatTokensCompact(cell.tokenCount) + " tokens"
+        let costStr = formatEurosCompact(cell.costUSD)
+        let values = byCost ? "\(costStr) · \(tokenStr)" : "\(tokenStr) · \(costStr)"
+        return "\(dateStr)\n\(cell.messageCount) msgs · \(values)"
+    }
+
+    private func metric(_ entry: HeatmapEntry) -> Double {
+        byCost ? entry.costUSD : Double(entry.tokenCount)
+    }
+
+    private func metric(_ cell: Cell) -> Double {
+        byCost ? cell.costUSD : Double(cell.tokenCount)
+    }
+
+    private func formatEurosCompact(_ usd: Double) -> String {
+        let eur = usd * ModelPricing.usdToEur
+        if eur >= 1_000 { return String(format: "%.1fk €", eur / 1_000) }
+        if eur >= 10 { return String(format: "%.0f €", eur) }
+        return String(format: "%.1f €", eur)
     }
 
     private func formatTokensCompact(_ count: Int) -> String {
@@ -1561,29 +1594,30 @@ private struct DetailActivityHeatmap: View {
         return "\(count)"
     }
 
-    private func percentile75() -> Int {
-        let nonZero = entries.map(\.tokenCount).filter { $0 > 0 }.sorted()
+    private func percentile75() -> Double {
+        let nonZero = entries.map(metric).filter { $0 > 0 }.sorted()
         guard !nonZero.isEmpty else { return 1 }
         let index = Int(Double(nonZero.count - 1) * 0.75)
-        return max(nonZero[index], 1)
+        return nonZero[index] > 0 ? nonZero[index] : 1
     }
 
-    private func colorForCell(_ cell: Cell, max: Int, p75: Int) -> Color {
+    private func colorForCell(_ cell: Cell, max: Double, p75: Double) -> Color {
         guard cell.inRange else { return .clear }
-        if cell.tokenCount == 0 { return .white.opacity(0.06) }
+        let value = metric(cell)
+        if value == 0 { return .white.opacity(0.06) }
 
-        let threshold = Double(p75)
+        let threshold = p75
 
-        if Double(cell.tokenCount) <= threshold {
+        if value <= threshold {
             // Phase 1: Linear orange gradient
-            let ratio = Double(cell.tokenCount) / threshold
+            let ratio = value / threshold
             let opacity = 0.06 + ratio * 0.94
             return TerminalColors.prompt.opacity(opacity)
         } else {
             // Phase 2: Heated metal — orange → amber → yellow → white
-            let range = Double(max) - threshold
+            let range = max - threshold
             guard range > 0 else { return .white }
-            let normalized = min((Double(cell.tokenCount) - threshold) / range, 1.0)
+            let normalized = min((value - threshold) / range, 1.0)
             let r = 0.85 + pow(normalized, 0.2) * 0.15
             let g = 0.47 + pow(normalized, 0.45) * 0.53
             let b = 0.34 + pow(normalized, 0.9) * 0.66
@@ -1601,10 +1635,12 @@ private struct DetailActivityHeatmap: View {
         let recordDay = recordDate.map { calendar.startOfDay(for: $0) }
         var msgLookup: [Date: Int] = [:]
         var tokLookup: [Date: Int] = [:]
+        var costLookup: [Date: Double] = [:]
         for entry in entries {
             let day = calendar.startOfDay(for: entry.date)
             msgLookup[day] = entry.messageCount
             tokLookup[day] = entry.tokenCount
+            costLookup[day] = entry.costUSD
         }
 
         let firstDay = calendar.startOfDay(for: firstEntry.date)
@@ -1624,6 +1660,7 @@ private struct DetailActivityHeatmap: View {
                     date: day,
                     messageCount: inRange ? (msgLookup[day] ?? 0) : 0,
                     tokenCount: inRange ? (tokLookup[day] ?? 0) : 0,
+                    costUSD: inRange ? (costLookup[day] ?? 0) : 0,
                     inRange: inRange,
                     isRecord: recordDay != nil && day == recordDay
                 ))
