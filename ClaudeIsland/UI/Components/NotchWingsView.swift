@@ -158,6 +158,15 @@ struct NotchWingsView: View {
     @AppStorage("wingsFontSize") private var fontSizeRaw: Double = 10
     /// Panneau all-time : affichage par jour (false) ou par mois (true).
     @AppStorage("allTimeCostMonthly") private var allTimeMonthly: Bool = false
+    /// Panneau all-time : vue « cost » (coût, projection) ou « models » (détail par modèle).
+    @AppStorage("allTimeView") private var allTimeView: String = "cost"
+    /// Vue Modèles : « bars » (histogramme) ou « graph » (courbes dans le temps).
+    @AppStorage("allTimeModelStyle") private var modelStyleRaw: String = "bars"
+    @AppStorage("allTimeModelCurve") private var modelCurveRaw: String = ModelCurve.value.rawValue
+    @AppStorage("allTimeModelMetric") private var modelMetricRaw: String = ModelMetric.cost.rawValue
+    @AppStorage("allTimeModelPeriod") private var modelPeriodRaw: String = ModelPeriod.all.rawValue
+    /// Familles masquées (valeurs séparées par des virgules).
+    @AppStorage("allTimeModelHidden") private var modelHiddenRaw: String = ""
     /// Record : jour au plus de tokens (false) ou au coût API le plus élevé (true).
     @AppStorage("recordByCost") private var recordByCost: Bool = false
     @AppStorage("wingsElements") private var wingsElementsData: Data = {
@@ -186,10 +195,14 @@ struct NotchWingsView: View {
         case .daily:
             guard let st = stats, !st.last7Days.isEmpty else { return 108 }
             return CGFloat(20 + 18 + st.last7Days.count * 18)
+        case .tokensAllTime where allTimeView == "models":
+            // Marges, titre, onglets, 2 lignes de bascules, pastilles, synthèse
+            // (6 intervalles de 8), corps (histogramme ou graphe)
+            return 6 * fontSize + 108 + ModelUsageStyle.bodyHeight(fontSize: fontSize, graph: modelStyle == "graph")
         case .tokensAllTime:
-            // Bloc de base + tableau de projection (titre, en-tête, 3 lignes)
-            // + graphe de tendance (légende, 90 pt, note)
-            return 108 + 5 * (fontSize + 6) + 8 + 90 + 2 * (fontSize + 6) + 16
+            // Bloc de base + onglets + tableau de projection (titre, en-tête,
+            // 3 lignes) + graphe de tendance (légende, 90 pt, note)
+            return 108 + allTimeTabsHeight + 8 + 5 * (fontSize + 6) + 8 + 90 + 2 * (fontSize + 6) + 16
         default:
             return 108
         }
@@ -248,6 +261,12 @@ struct NotchWingsView: View {
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: expandedSection)
         .onChange(of: expandedSection) { _, newValue in
             expandedHeight = newValue != nil ? detailPanelHeight + 8 : 0
+        }
+        .onChange(of: allTimeView) { _, _ in
+            if expandedSection == .tokensAllTime { expandedHeight = detailPanelHeight + 8 }
+        }
+        .onChange(of: modelStyleRaw) { _, _ in
+            if expandedSection == .tokensAllTime { expandedHeight = detailPanelHeight + 8 }
         }
     }
 
@@ -643,14 +662,15 @@ struct NotchWingsView: View {
         let panelWidth = allTimePanelWidth
 
         return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Tokens — All Time")
-                    .font(.system(size: fontSize, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.7))
-                Spacer()
-                periodToggle
-            }
+            Text("Tokens — All Time")
+                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.7))
 
+            allTimeTabs
+
+            if showModels {
+                modelsSection(st, monthly: monthly)
+            } else {
             HStack(alignment: .top, spacing: 0) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Total").font(smallFont).foregroundColor(.white.opacity(0.4))
@@ -694,6 +714,7 @@ struct NotchWingsView: View {
             } else if st.workdayCostTrend.count > 1 {
                 WorkdayCostChart(points: st.workdayCostTrend, fontSize: fontSize)
             }
+            }
         }
         .frame(width: panelWidth, alignment: .leading)
         .padding(10)
@@ -734,6 +755,150 @@ struct NotchWingsView: View {
                     .font(boldFont)
                 }
             }
+        }
+    }
+
+    // MARK: - Vue Modèles
+
+    private var showModels: Bool { allTimeView == "models" }
+    private var modelStyle: String { modelStyleRaw == "graph" ? "graph" : "bars" }
+    private var modelMetric: ModelMetric { ModelMetric(rawValue: modelMetricRaw) ?? .cost }
+    private var modelPeriod: ModelPeriod { ModelPeriod(rawValue: modelPeriodRaw) ?? .all }
+    private var hiddenFamilies: Set<ModelFamily> {
+        Set(modelHiddenRaw.split(separator: ",").compactMap { ModelFamily(rawValue: String($0)) })
+    }
+
+    private func toggleFamily(_ family: ModelFamily) {
+        var hidden = hiddenFamilies
+        if hidden.contains(family) { hidden.remove(family) } else { hidden.insert(family) }
+        modelHiddenRaw = hidden.map(\.rawValue).sorted().joined(separator: ",")
+    }
+
+    /// Bascule segmentée générique (même style que les bascules jour/mois et tokens/€).
+    private func segmented<T: Hashable>(_ options: [(value: T, label: String)], selection: T,
+                                        onSelect: @escaping (T) -> Void) -> some View {
+        HStack(spacing: 0) {
+            ForEach(options.indices, id: \.self) { index in
+                let selected = options[index].value == selection
+                Text(options[index].label)
+                    .font(smallFont)
+                    .foregroundColor(.white.opacity(selected ? 0.85 : 0.35))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(.white.opacity(selected ? 0.15 : 0)))
+                    .contentShape(Rectangle())
+                    .onTapGesture { onSelect(options[index].value) }
+            }
+        }
+        .padding(1)
+        .background(RoundedRectangle(cornerRadius: 5).stroke(.white.opacity(0.15), lineWidth: 1))
+    }
+
+    private var modelCurve: ModelCurve { ModelCurve(rawValue: modelCurveRaw) ?? .value }
+
+    /// Hauteur de la barre d'onglets (libellé, soulignement, filet).
+    private var allTimeTabsHeight: CGFloat { fontSize + 10 }
+
+    /// Onglets du panneau all-time : Coût (projection) / Modèles (mémorisé).
+    /// Onglets soulignés posés sur un filet — une navigation entre deux vues,
+    /// de nature différente des bascules segmentées (réglages d'affichage)
+    /// comme jour / mois, qui se loge à droite de la barre quand il s'applique.
+    private var allTimeTabs: some View {
+        HStack(alignment: .bottom, spacing: 16) {
+            ForEach([("cost", "Coût"), ("models", "Modèles")], id: \.0) { value, label in
+                let selected = allTimeView == value
+                VStack(spacing: 4) {
+                    Text(label)
+                        .font(.system(size: fontSize, weight: selected ? .bold : .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(selected ? 0.9 : 0.4))
+                    Capsule()
+                        .fill(selected ? TerminalColors.amber : .clear)
+                        .frame(height: 2)
+                }
+                .fixedSize()
+                .contentShape(Rectangle())
+                .onTapGesture { allTimeView = value }
+            }
+            Spacer(minLength: 8)
+            if !showModels || modelStyle == "graph" {
+                periodToggle.padding(.bottom, 4)
+            }
+        }
+        .frame(height: allTimeTabsHeight, alignment: .bottom)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func modelsSection(_ st: DailyStats, monthly: Bool) -> some View {
+        let metric = modelMetric
+        let period = modelPeriod
+        let hidden = hiddenFamilies
+        var selection = ModelSelection()
+        let _ = { selection.period = period; selection.metric = metric; selection.hiddenFamilies = hidden }()
+        let totals = ModelBreakdown.totals(st.modelDays, selection: selection)
+        let ranked = ModelBreakdown.ranked(totals, maxModels: selection.maxModels, metric: metric)
+        let familyTotals = ModelBreakdown.familyTotals(st.modelDays, period: period, metric: metric)
+        let sumTokens = totals.reduce(0) { $0 + $1.tokens }
+        let sumCost = totals.reduce(0.0) { $0 + $1.costUSD }
+
+        VStack(alignment: .leading, spacing: 8) {
+            // Ligne 1 : métrique et type d'affichage
+            HStack(spacing: 8) {
+                segmented([(ModelMetric.cost, "€"), (ModelMetric.tokens, "tokens")], selection: metric) { modelMetricRaw = $0.rawValue }
+                Spacer(minLength: 8)
+                segmented([("bars", "histogramme"), ("graph", "graphe")], selection: modelStyle) { modelStyleRaw = $0 }
+            }
+
+            // Ligne 2 : période, et lecture des courbes en mode graphe
+            HStack(spacing: 8) {
+                segmented(ModelPeriod.allCases.map { ($0, $0.label) }, selection: period) { modelPeriodRaw = $0.rawValue }
+                Spacer(minLength: 8)
+                if modelStyle == "graph" {
+                    segmented(ModelCurve.allCases.map { ($0, $0.label) }, selection: modelCurve) { modelCurveRaw = $0.rawValue }
+                }
+            }
+
+            // Pastilles de famille : filtre multiple, teinte = teinte du graphe
+            HStack(spacing: 5) {
+                ForEach(ModelFamily.allCases.filter { (familyTotals[$0] ?? 0) > 0 || hidden.contains($0) }, id: \.self) { family in
+                    let isHidden = hidden.contains(family)
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(ModelUsageStyle.colors(for: [ModelInfo(id: family.rawValue, family: family, label: "", version: [])])[family.rawValue] ?? .gray)
+                            .frame(width: 6, height: 6)
+                        Text(family.label).font(smallFont)
+                    }
+                    .foregroundColor(.white.opacity(isHidden ? 0.25 : 0.7))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(.white.opacity(isHidden ? 0 : 0.1)))
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(.white.opacity(isHidden ? 0.1 : 0.0), lineWidth: 1))
+                    .contentShape(Rectangle())
+                    .onTapGesture { toggleFamily(family) }
+                }
+                Spacer(minLength: 0)
+            }
+
+            // Synthèse de la sélection
+            Text("\(period == .all ? "Depuis le début" : "\(period.label) glissants") · \(formatEuros(sumCost)) · \(formatTokens(sumTokens)) · \(totals.count) modèle\(totals.count > 1 ? "s" : "")")
+                .font(smallFont).foregroundColor(.white.opacity(0.4)).lineLimit(1)
+
+            Group {
+                if totals.isEmpty {
+                    Text("Aucun usage pour ce filtre")
+                        .font(smallFont).foregroundColor(.white.opacity(0.4))
+                } else if modelStyle == "graph" {
+                    ModelLineChart(
+                        points: ModelBreakdown.series(st.modelDays, selection: selection, monthly: monthly, curve: modelCurve),
+                        totals: ranked, metric: metric, curve: modelCurve, monthly: monthly,
+                        shortPeriod: period != .all, fontSize: fontSize)
+                } else {
+                    ModelHistogram(totals: ranked, metric: metric, fontSize: fontSize)
+                }
+            }
+            .frame(height: ModelUsageStyle.bodyHeight(fontSize: fontSize, graph: modelStyle == "graph"), alignment: .top)
         }
     }
 

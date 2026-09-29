@@ -332,7 +332,11 @@ function computeStats(files) {
     lastComputedDate: new Date().toISOString().split('T')[0],
     dailyActivity: [...dailyActivity.values()].sort((a, b) => a.date.localeCompare(b.date)),
     dailyModelTokens: [...dailyModelTokens.entries()]
-      .map(([date, d]) => ({ date, tokensByModel: d.tokensByModel, costUSD: round2(d.costUSD) }))
+      .map(([date, d]) => ({
+        date, tokensByModel: d.tokensByModel, costUSD: round2(d.costUSD),
+        // Coût par modèle (panneau « Modèles » de l'app) — champ optionnel.
+        costByModel: Object.fromEntries(Object.entries(d.costByModel).map(([m, c]) => [m, round2(c)])),
+      }))
       .sort((a, b) => a.date.localeCompare(b.date)),
     modelUsage: Object.fromEntries(Object.entries(modelUsage)
       .map(([m, u]) => [m, { ...u, costUSD: round2(u.costUSD) }])),
@@ -356,8 +360,9 @@ function computeStats(files) {
 }
 
 function addDay(dailyModelTokens, day, model, tokens, cost) {
-  const d = dailyModelTokens.get(day) || { tokensByModel: {}, costUSD: 0 };
+  const d = dailyModelTokens.get(day) || { tokensByModel: {}, costByModel: {}, costUSD: 0 };
   d.tokensByModel[model] = (d.tokensByModel[model] || 0) + tokens;
+  d.costByModel[model] = (d.costByModel[model] || 0) + cost;
   d.costUSD += cost;
   dailyModelTokens.set(day, d);
 }

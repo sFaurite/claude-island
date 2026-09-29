@@ -89,6 +89,8 @@ struct DailyStats: Sendable {
     /// Durée de l'historique en mois (du 1er jour à maintenant, 30,44 j/mois).
     let monthsOfHistory: Double
     let last7Days: [DayHistoryEntry]
+    /// Usage par jour et par modèle (vue Modèles du panneau all-time).
+    let modelDays: [ModelDayUsage]
 
     /// Record selon la métrique choisie (tokens ou coût API).
     func record(byCost: Bool) -> (date: String, tokens: Int, costUSD: Double) {
@@ -242,6 +244,22 @@ struct StatsReader: Sendable {
             }
         let last7Days = Array(recentDays)
 
+        // Usage par modèle. Cache sans costByModel (avant l'ajout du champ) : coût
+        // estimé au prix moyen par token du modèle sur tout l'historique.
+        let avgCostPerToken: [String: Double] = cache.modelUsage.mapValues { usage in
+            let tokens = usage.inputTokens + usage.outputTokens + (usage.cacheCreationInputTokens ?? 0)
+            return tokens > 0 ? (usage.costUSD ?? 0) / Double(tokens) : 0
+        }
+        let modelDays = cache.dailyModelTokens.map { entry in
+            ModelDayUsage(
+                date: entry.date,
+                tokens: entry.tokensByModel,
+                costUSD: entry.costByModel ?? entry.tokensByModel.reduce(into: [:]) { acc, pair in
+                    acc[pair.key] = Double(pair.value) * (avgCostPerToken[pair.key] ?? 0)
+                }
+            )
+        }
+
         let workdayAverages = Self.workdayCostAverages(costByDate: costByDate, today: today)
         let workdayTrend = Self.workdayCostTrend(costByDate: costByDate, today: today)
         // Aujourd'hui au coût live (plus frais que le cache horaire)
@@ -281,7 +299,8 @@ struct StatsReader: Sendable {
             workdayCostTrend: workdayTrend,
             monthlyCosts: monthly,
             monthsOfHistory: months,
-            last7Days: last7Days
+            last7Days: last7Days,
+            modelDays: modelDays
         )
     }
 }
@@ -399,6 +418,7 @@ private struct DailyModelTokenEntry: Codable {
     let date: String
     let tokensByModel: [String: Int]
     let costUSD: Double?          // absent avant le cache v3
+    let costByModel: [String: Double]?  // absent avant l'ajout du détail par modèle
 }
 
 private struct ModelUsageEntry: Codable {
