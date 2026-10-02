@@ -148,6 +148,19 @@ struct ModelLineChart: View {
         return ModelUsageStyle.format(total.value(metric), metric: metric)
     }
 
+    /// Domaine et teintes de `chartForegroundStyleScale` : Swift Charts plante
+    /// (trap) sur une valeur de `foregroundStyle(by:)` absente du domaine — on y
+    /// ajoute donc tout libellé des points qui manquerait à la légende.
+    private func colorScale(_ colors: [String: Color]) -> (labels: [String], range: [Color]) {
+        var labels = totals.map(\.info.label)
+        var range = totals.map { colors[$0.info.id] ?? .gray }
+        for point in points where !labels.contains(point.info.label) {
+            labels.append(point.info.label)
+            range.append(.gray)
+        }
+        return (labels, range)
+    }
+
     private var caption: String {
         switch curve {
         case .value:      return monthly ? "Total par mois" : "Par jour · moyenne glissante \(ModelBreakdown.smoothingDays) j"
@@ -158,8 +171,7 @@ struct ModelLineChart: View {
 
     var body: some View {
         let colors = ModelUsageStyle.colors(for: totals.map(\.info))
-        let labels = totals.map(\.info.label)
-        let range = totals.map { colors[$0.info.id] ?? .gray }
+        let (labels, range) = colorScale(colors)
         let captionHeight = fontSize + 2
         let chartHeight = ModelUsageStyle.bodyHeight(fontSize: fontSize, graph: true) - legendHeight - captionHeight - 12
 

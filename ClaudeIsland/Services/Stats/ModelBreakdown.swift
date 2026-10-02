@@ -214,7 +214,12 @@ enum ModelBreakdown {
     /// cumul repart de 0 au début de la période. Part : ratio 0…1.
     static func series(_ days: [ModelDayUsage], selection: ModelSelection, monthly: Bool,
                        curve: ModelCurve, now: Date = Date()) -> [ModelBucketValue] {
-        let top = Set(totals(days, selection: selection, now: now).prefix(selection.maxModels).map(\.info.id))
+        // « Reste » = modèles de la période au-delà du top N, exactement comme
+        // `ranked` : un modèle absent de la période (usage plus ancien, lu ici
+        // pour le lissage) ne doit pas faire naître un « Reste » hors légende.
+        let periodTotals = totals(days, selection: selection, now: now)
+        let top = Set(periodTotals.prefix(selection.maxModels).map(\.info.id))
+        let tail = Set(periodTotals.dropFirst(selection.maxModels).map(\.info.id))
         guard !top.isEmpty else { return [] }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = utc
@@ -232,7 +237,7 @@ enum ModelBreakdown {
             if let cutoffKey, day.date < cutoffKey { continue }
             guard let date = formatter.date(from: day.date) else { continue }
             for id in Set(day.tokens.keys).union(day.costUSD.keys) {
-                guard visible(id, hidden: selection.hiddenFamilies) != nil else { continue }
+                guard top.contains(id) || tail.contains(id) else { continue }
                 let value = selection.metric == .cost ? (day.costUSD[id] ?? 0) : Double(day.tokens[id] ?? 0)
                 guard value > 0 else { continue }
                 grid[bucket(date), default: [:]][top.contains(id) ? id : restId, default: 0] += value
