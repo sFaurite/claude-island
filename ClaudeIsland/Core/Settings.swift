@@ -333,7 +333,8 @@ enum AppSettings {
 
     // MARK: - Auto-Open
 
-    /// Whether the notch opens automatically (on hover and on session notifications).
+    /// Whether the notch opens automatically (on hover, on session notifications
+    /// and with the boot animation replayed on screen changes).
     /// When false, the notch only opens via explicit user actions (click, hotkey).
     /// Defaults to false so the notch never opens on its own unless the user opts in.
     static var autoOpenNotch: Bool {

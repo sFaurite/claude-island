@@ -7,7 +7,10 @@
 
 import AppKit
 import Combine
+import os.log
 import SwiftUI
+
+private let logger = Logger(subsystem: "com.claudeisland", category: "Notch")
 
 enum NotchStatus: Equatable {
     case closed
@@ -329,6 +332,7 @@ class NotchViewModel: ObservableObject {
     // MARK: - Actions
 
     func notchOpen(reason: NotchOpenReason = .unknown) {
+        logger.notice("notchOpen reason=\(String(describing: reason), privacy: .public)")
         openReason = reason
         status = .opened
 
@@ -386,7 +390,10 @@ class NotchViewModel: ObservableObject {
     }
 
     /// Perform boot animation: expand briefly then collapse
+    /// Skipped when auto-open is off: the window is rebuilt on every screen
+    /// parameter change (wake, display, Dock…), which replayed this animation.
     func performBootAnimation() {
+        guard AppSettings.autoOpenNotch else { return }
         notchOpen(reason: .boot)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self = self, self.openReason == .boot else { return }
