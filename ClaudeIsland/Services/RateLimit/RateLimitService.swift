@@ -9,8 +9,10 @@ import Foundation
 import os.log
 
 struct RateLimitData: Sendable, Codable {
-    let fiveHourUtilization: Double    // 0.0–1.0
-    let fiveHourReset: Date
+    // Fenêtre 5 h — `five_hour` vaut null pour certains plans (Ultra, ex-Max,
+    // depuis fin octobre 2026) : nil → pill 5h masquée.
+    var fiveHourUtilization: Double?   // 0.0–1.0
+    var fiveHourReset: Date?
     let sevenDayUtilization: Double    // 0.0–1.0
     let sevenDayReset: Date
     let overageUtilization: Double     // 0.0–1.0
@@ -140,7 +142,7 @@ actor RateLimitService {
     // MARK: - API Call
 
     /// Une seule requête GET /api/oauth/usage fournit tout : fenêtres 5 h et 7 j
-    /// (`five_hour`, `seven_day`), dépassement (`extra_usage`) et limite hebdo
+    /// (`five_hour` — null sur les plans sans fenêtre 5 h —, `seven_day`), dépassement (`extra_usage`) et limite hebdo
     /// Fable (`limits[kind == weekly_scoped]`).
     ///
     /// Jusqu'au 17/09/2026, les fenêtres 5 h / 7 j étaient lues dans les en-têtes
@@ -164,10 +166,14 @@ actor RateLimitService {
             throw RateLimitError.apiError(statusCode: http.statusCode)
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            Self.logger.error("/api/oauth/usage: réponse non JSON")
             throw RateLimitError.invalidResponse
         }
 
-        let fiveHour = try Self.parseWindow(json["five_hour"])
+        // `five_hour` est null sur les plans sans fenêtre 5 h (Ultra) : on ne
+        // l'exige plus, sinon tout le relevé échouait en silence.
+        let fiveHour: (utilization: Double, reset: Date)? =
+            json["five_hour"] is NSNull || json["five_hour"] == nil ? nil : try Self.parseWindow(json["five_hour"])
         let sevenDay = try Self.parseWindow(json["seven_day"])
 
         // Dépassement : `extra_usage.utilization` (pourcentage) ; absent ou null
@@ -177,8 +183,8 @@ actor RateLimitService {
         let fable = Self.parseFableWeekly(json, weeklyReset: sevenDay.reset)
 
         return RateLimitData(
-            fiveHourUtilization: fiveHour.utilization,
-            fiveHourReset: fiveHour.reset,
+            fiveHourUtilization: fiveHour?.utilization,
+            fiveHourReset: fiveHour?.reset,
             sevenDayUtilization: sevenDay.utilization,
             sevenDayReset: sevenDay.reset,
             overageUtilization: overage / 100.0,
@@ -194,6 +200,7 @@ actor RateLimitService {
     private static func parseWindow(_ any: Any?) throws -> (utilization: Double, reset: Date) {
         guard let dict = any as? [String: Any],
               let percent = (dict["utilization"] as? NSNumber)?.doubleValue else {
+            logger.error("/api/oauth/usage: fenêtre illisible (\(String(describing: any), privacy: .public))")
             throw RateLimitError.invalidResponse
         }
         let reset = (dict["resets_at"] as? String).flatMap { isoFormatter.date(from: $0) } ?? Date()

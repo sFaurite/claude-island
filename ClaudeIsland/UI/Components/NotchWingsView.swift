@@ -381,8 +381,8 @@ struct NotchWingsView: View {
                     .onTapGesture { toggleSection(.rateLimitFable) }
             }
         case "5h":
-            if let rl = rateLimits {
-                rateLimitPill(label: "5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, forceUnit: nil, windowSeconds: 5 * 3600)
+            if let rl = rateLimits, let util = rl.fiveHourUtilization, let reset = rl.fiveHourReset {
+                rateLimitPill(label: "5h", utilization: util, reset: reset, forceUnit: nil, windowSeconds: 5 * 3600)
                     .contentShape(Rectangle())
                     .onTapGesture { toggleSection(.rateLimit5h) }
             }
@@ -581,8 +581,8 @@ struct NotchWingsView: View {
                 rateLimitDetail(title: "Current week (Fable)", utilization: util, reset: reset, windowSeconds: 7 * 86400)
             }
         case .rateLimit5h:
-            if let rl = rateLimits {
-                rateLimitDetail(title: "Rate Limit 5h", utilization: rl.fiveHourUtilization, reset: rl.fiveHourReset, windowSeconds: 5 * 3600)
+            if let rl = rateLimits, let util = rl.fiveHourUtilization, let reset = rl.fiveHourReset {
+                rateLimitDetail(title: "Rate Limit 5h", utilization: util, reset: reset, windowSeconds: 5 * 3600)
             }
         case .rateLimit7j:
             if let rl = rateLimits {
