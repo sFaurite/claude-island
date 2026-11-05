@@ -36,10 +36,16 @@ struct HookInstaller {
 
     private static func updateSettings(at settingsURL: URL) {
         var json: [String: Any] = [:]
-        if let data = try? Data(contentsOf: settingsURL),
-           let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        if FileManager.default.fileExists(atPath: settingsURL.path) {
+            // Illisible ou mal formé (fichier tronqué, édition en cours…) : surtout ne pas repartir de zéro, tous les réglages seraient perdus.
+            guard let data = try? Data(contentsOf: settingsURL),
+                  let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                print("HookInstaller: \(settingsURL.path) illisible, hooks non installés")
+                return
+            }
             json = existing
         }
+        let original = json as NSDictionary
 
         let python = detectPython()
         let command = "\(python) ~/.claude/hooks/claude-island-state.py"
@@ -90,11 +96,14 @@ struct HookInstaller {
 
         json["hooks"] = hooks
 
+        // Rien à changer : le fichier n'est pas réécrit, pour ne pas écraser ce qu'un autre y écrirait au même moment.
+        if (json as NSDictionary).isEqual(original) { return }
+
         if let data = try? JSONSerialization.data(
             withJSONObject: json,
             options: [.prettyPrinted, .sortedKeys]
         ) {
-            try? data.write(to: settingsURL)
+            try? data.write(to: settingsURL, options: .atomic)
         }
     }
 
@@ -200,7 +209,7 @@ struct HookInstaller {
             withJSONObject: json,
             options: [.prettyPrinted, .sortedKeys]
         ) {
-            try? data.write(to: settings)
+            try? data.write(to: settings, options: .atomic)
         }
     }
 
