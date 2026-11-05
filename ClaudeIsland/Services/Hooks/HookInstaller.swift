@@ -9,6 +9,8 @@ import Foundation
 
 struct HookInstaller {
 
+    private static let hookTimeoutSeconds = 5
+
     /// Install hook script and update settings.json on app launch
     static func installIfNeeded() {
         let claudeDir = FileManager.default.homeDirectoryForCurrentUser
@@ -94,6 +96,8 @@ struct HookInstaller {
             }
         }
 
+        limitHookDuration(in: &hooks)
+
         json["hooks"] = hooks
 
         // Rien à changer : le fichier n'est pas réécrit, pour ne pas écraser ce qu'un autre y écrirait au même moment.
@@ -104,6 +108,24 @@ struct HookInstaller {
             options: [.prettyPrinted, .sortedKeys]
         ) {
             try? data.write(to: settingsURL, options: .atomic)
+        }
+    }
+
+    /// Plafonne la durée de nos hooks, nouveaux ou déjà posés : ils sont synchrones, et un événement perdu ne coûte qu'un affichage en retard.
+    private static func limitHookDuration(in hooks: inout [String: Any]) {
+        for (event, value) in hooks {
+            guard var entries = value as? [[String: Any]] else { continue }
+            for i in entries.indices {
+                guard var entryHooks = entries[i]["hooks"] as? [[String: Any]] else { continue }
+                for j in entryHooks.indices {
+                    let cmd = entryHooks[j]["command"] as? String ?? ""
+                    if cmd.contains("claude-island-state.py") {
+                        entryHooks[j]["timeout"] = hookTimeoutSeconds
+                    }
+                }
+                entries[i]["hooks"] = entryHooks
+            }
+            hooks[event] = entries
         }
     }
 
