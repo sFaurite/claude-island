@@ -1,40 +1,21 @@
 import AppKit
-
-
-import Sparkle
 import SwiftUI
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var windowManager: WindowManager?
     private var screenObserver: ScreenObserver?
-    private var updateCheckTimer: Timer?
     private var rateLimitRefreshTimer: Timer?
     private var rateLimitActivity: NSObjectProtocol?
 
     static var shared: AppDelegate?
-    let updater: SPUUpdater
-    private let userDriver: NotchUserDriver
 
     var windowController: NotchWindowController? {
         windowManager?.windowController
     }
 
     override init() {
-        userDriver = NotchUserDriver()
-        updater = SPUUpdater(
-            hostBundle: Bundle.main,
-            applicationBundle: Bundle.main,
-            userDriver: userDriver,
-            delegate: nil
-        )
         super.init()
         AppDelegate.shared = self
-
-        do {
-            try updater.start()
-        } catch {
-            print("Failed to start Sparkle updater: \(error)")
-        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -42,8 +23,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSApplication.shared.terminate(nil)
             return
         }
-
-        // Mixpanel analytics removed
 
         HookInstaller.installIfNeeded()
         NSApplication.shared.setActivationPolicy(.accessory)
@@ -69,15 +48,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if AppSettings.isHideAllShortcutEnabled {
             GlobalHotkeyManager.shared.register(shortcut: AppSettings.hideAllShortcut, id: 3)
-        }
-
-        if updater.canCheckForUpdates {
-            updater.checkForUpdates()
-        }
-
-        updateCheckTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
-            guard let updater = self?.updater, updater.canCheckForUpdates else { return }
-            updater.checkForUpdates()
         }
 
         startRateLimitBackgroundRefresh()
@@ -112,7 +82,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         GlobalHotkeyManager.shared.unregisterAll()
-        updateCheckTimer?.invalidate()
         rateLimitRefreshTimer?.invalidate()
         if let rateLimitActivity {
             Foundation.ProcessInfo.processInfo.endActivity(rateLimitActivity)
@@ -122,7 +91,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func ensureSingleInstance() -> Bool {
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.farouqaldori.ClaudeIsland"
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.celestial.ClaudeIsland"
         let runningApps = NSWorkspace.shared.runningApplications.filter {
             $0.bundleIdentifier == bundleID
         }

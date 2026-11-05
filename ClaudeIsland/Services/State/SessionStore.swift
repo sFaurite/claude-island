@@ -120,7 +120,6 @@ actor SessionStore {
         let isNewSession = sessions[sessionId] == nil
         var session = sessions[sessionId] ?? createSession(from: event)
 
-        // Mixpanel tracking removed
 
         session.pid = event.pid
         if let pid = event.pid {

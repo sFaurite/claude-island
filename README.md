@@ -4,7 +4,7 @@
   <p align="center">
     A macOS menu bar app that brings Dynamic Island-style notifications to Claude Code CLI sessions.
     <br />
-    This is an extended fork of <a href="https://github.com/farouqaldori/claude-island">farouqaldori/claude-island</a> with notch wings, token stats, and fullscreen detection.
+    An independent derivative of <a href="https://github.com/farouqaldori/claude-island">claude-island</a> by Farouq Aldori (Apache 2.0), no longer synchronized with it and receiving no updates from it, with notch wings, token stats, and fullscreen detection.
   </p>
 </div>
 
