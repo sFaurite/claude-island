@@ -44,9 +44,7 @@ struct HookInstaller {
         let python = detectPython()
         let command = "\(python) ~/.claude/hooks/claude-island-state.py"
         let hookEntry: [[String: Any]] = [["type": "command", "command": command]]
-        let hookEntryWithTimeout: [[String: Any]] = [["type": "command", "command": command, "timeout": 86400]]
         let withMatcher: [[String: Any]] = [["matcher": "*", "hooks": hookEntry]]
-        let withMatcherAndTimeout: [[String: Any]] = [["matcher": "*", "hooks": hookEntryWithTimeout]]
         let withoutMatcher: [[String: Any]] = [["hooks": hookEntry]]
         let preCompactConfig: [[String: Any]] = [
             ["matcher": "auto", "hooks": hookEntry],
@@ -55,11 +53,13 @@ struct HookInstaller {
 
         var hooks = json["hooks"] as? [String: Any] ?? [:]
 
+        removePermissionHook(from: &hooks)
+
+        // Pas de PermissionRequest : les permissions se traitent dans le terminal, jamais dans l'encoche.
         let hookEvents: [(String, [[String: Any]])] = [
             ("UserPromptSubmit", withoutMatcher),
             ("PreToolUse", withMatcher),
             ("PostToolUse", withMatcher),
-            ("PermissionRequest", withMatcherAndTimeout),
             ("Notification", withMatcher),
             ("Stop", withoutMatcher),
             ("SubagentStop", withoutMatcher),
@@ -95,6 +95,33 @@ struct HookInstaller {
             options: [.prettyPrinted, .sortedKeys]
         ) {
             try? data.write(to: settingsURL)
+        }
+    }
+
+    /// Retire notre hook de PermissionRequest, posé par les versions précédentes, sans toucher aux hooks des autres.
+    private static func removePermissionHook(from hooks: inout [String: Any]) {
+        guard let entries = hooks["PermissionRequest"] as? [[String: Any]] else { return }
+
+        var kept: [[String: Any]] = []
+        for var entry in entries {
+            guard let entryHooks = entry["hooks"] as? [[String: Any]] else {
+                kept.append(entry)
+                continue
+            }
+            let others = entryHooks.filter { hook in
+                let cmd = hook["command"] as? String ?? ""
+                return !cmd.contains("claude-island-state.py")
+            }
+            if !others.isEmpty {
+                entry["hooks"] = others
+                kept.append(entry)
+            }
+        }
+
+        if kept.isEmpty {
+            hooks.removeValue(forKey: "PermissionRequest")
+        } else {
+            hooks["PermissionRequest"] = kept
         }
     }
 

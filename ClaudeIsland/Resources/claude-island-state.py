@@ -2,7 +2,7 @@
 """
 Claude Island Hook
 - Sends session state to ClaudeIsland.app via Unix socket
-- For PermissionRequest: waits for user decision from the app
+- Never waits for the app: permissions are answered in the terminal
 """
 import json
 import os
@@ -10,7 +10,7 @@ import socket
 import sys
 
 SOCKET_PATH = "/tmp/claude-island.sock"
-TIMEOUT_SECONDS = 300  # 5 minutes for permission decisions
+TIMEOUT_SECONDS = 2  # Ces hooks sont synchrones : une app figée ne doit pas retenir Claude Code
 
 
 def get_tty():
@@ -50,25 +50,15 @@ def get_tty():
 
 
 def send_event(state):
-    """Send event to app, return response if any"""
+    """Send event to app, without waiting for an answer"""
     try:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(TIMEOUT_SECONDS)
         sock.connect(SOCKET_PATH)
         sock.sendall(json.dumps(state).encode())
-
-        # For permission requests, wait for response
-        if state.get("status") == "waiting_for_approval":
-            response = sock.recv(4096)
-            sock.close()
-            if response:
-                return json.loads(response.decode())
-        else:
-            sock.close()
-
-        return None
-    except (socket.error, OSError, json.JSONDecodeError):
-        return None
+        sock.close()
+    except (socket.error, OSError):
+        pass
 
 
 def main():
@@ -79,6 +69,11 @@ def main():
 
     session_id = data.get("session_id", "unknown")
     event = data.get("hook_event_name", "")
+
+    # Une session ouverte peut encore appeler ce hook pour une permission : elle reste au terminal.
+    if event == "PermissionRequest":
+        sys.exit(0)
+
     cwd = data.get("cwd", "")
     tool_input = data.get("tool_input", {})
 
@@ -118,51 +113,9 @@ def main():
         if tool_use_id_from_event:
             state["tool_use_id"] = tool_use_id_from_event
 
-    elif event == "PermissionRequest":
-        # This is where we can control the permission
-        state["status"] = "waiting_for_approval"
-        state["tool"] = data.get("tool_name")
-        state["tool_input"] = tool_input
-        # tool_use_id lookup handled by Swift-side cache from PreToolUse
-
-        # Send to app and wait for decision
-        response = send_event(state)
-
-        if response:
-            decision = response.get("decision", "ask")
-            reason = response.get("reason", "")
-
-            if decision == "allow":
-                # Output JSON to approve
-                output = {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PermissionRequest",
-                        "decision": {"behavior": "allow"},
-                    }
-                }
-                print(json.dumps(output))
-                sys.exit(0)
-
-            elif decision == "deny":
-                # Output JSON to deny
-                output = {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PermissionRequest",
-                        "decision": {
-                            "behavior": "deny",
-                            "message": reason or "Denied by user via ClaudeIsland",
-                        },
-                    }
-                }
-                print(json.dumps(output))
-                sys.exit(0)
-
-        # No response or "ask" - let Claude Code show its normal UI
-        sys.exit(0)
-
     elif event == "Notification":
         notification_type = data.get("notification_type")
-        # Skip permission_prompt - PermissionRequest hook handles this with better info
+        # La question est au terminal : rien à montrer dans l'encoche.
         if notification_type == "permission_prompt":
             sys.exit(0)
         elif notification_type == "idle_prompt":
