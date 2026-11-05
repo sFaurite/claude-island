@@ -46,11 +46,36 @@ actor RateLimitService {
     private var lastSuccess: RateLimitData?
     private static let minInterval: TimeInterval = 240
 
-    /// Après un 429, pas de nouvelle tentative avant ce délai.
+    /// Après un 429, pas de nouvelle tentative avant `cooldownUntil`. Le délai double
+    /// à chaque 429 consécutif (5, 10, 20, puis 30 min) : le 05/11/2026, un délai fixe
+    /// de 300 s a relancé le serveur toutes les 6 min pendant un blocage de plus de 1 h 30.
     private var cooldownUntil: Date?
-    private static let cooldown: TimeInterval = 300
+    private var consecutive429s = 0
+    private static let baseCooldown: TimeInterval = 300
+    private static let maxCooldown: TimeInterval = 1800
+    /// Plafond de `Retry-After`, pour qu'un en-tête aberrant ne fige pas le relevé.
+    private static let maxRetryAfter: TimeInterval = 6 * 3600
 
     private init() {}
+
+    /// Délai avant la prochaine tentative après `consecutive429s` refus d'affilée (≥ 1).
+    /// `Retry-After` prime sur le palier quand il demande d'attendre plus longtemps.
+    static func cooldownDelay(consecutive429s: Int, retryAfter: TimeInterval?) -> TimeInterval {
+        let doublings = min(max(consecutive429s - 1, 0), 4)
+        let backoff = min(baseCooldown * pow(2, Double(doublings)), maxCooldown)
+        return min(max(backoff, retryAfter ?? 0), maxRetryAfter)
+    }
+
+    /// `Retry-After` : nombre de secondes ou date HTTP (RFC 9110). nil si absent ou illisible.
+    static func parseRetryAfter(_ value: String?, now: Date = Date()) -> TimeInterval? {
+        guard let raw = value?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        if let seconds = TimeInterval(raw) { return seconds >= 0 && seconds.isFinite ? seconds : nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter.date(from: raw).map { max($0.timeIntervalSince(now), 0) }
+    }
 
     func fetch() async throws -> RateLimitData {
         if let last = lastSuccess, Date().timeIntervalSince(last.fetchedAt) < Self.minInterval {
@@ -59,7 +84,7 @@ actor RateLimitService {
         if let until = cooldownUntil {
             if Date() < until {
                 if let last = lastSuccess { return last }
-                throw RateLimitError.apiError(statusCode: 429)
+                throw RateLimitError.rateLimited(retryAfter: until.timeIntervalSinceNow)
             }
             cooldownUntil = nil
         }
@@ -73,6 +98,26 @@ actor RateLimitService {
     }
 
     private func performFetch() async throws -> RateLimitData {
+        do {
+            let data = try await fetchWithTokenRefresh()
+            consecutive429s = 0
+            lastSuccess = data
+            saveToDisk(data)
+            return data
+        } catch RateLimitError.rateLimited(let retryAfter) {
+            // Relire le trousseau à la prochaine tentative : le 05/11/2026, les 429 ont
+            // commencé 2 min après une écriture du trousseau et cessé dès le premier
+            // relevé d'un nouveau processus, qui en a relu le jeton.
+            cachedToken = nil
+            consecutive429s += 1
+            let delay = Self.cooldownDelay(consecutive429s: consecutive429s, retryAfter: retryAfter)
+            cooldownUntil = Date().addingTimeInterval(delay)
+            Self.logger.warning("/api/oauth/usage: \(self.consecutive429s, privacy: .public) refus d'affilée, cooldown \(Int(delay), privacy: .public) s")
+            throw RateLimitError.rateLimited(retryAfter: delay)
+        }
+    }
+
+    private func fetchWithTokenRefresh() async throws -> RateLimitData {
         let token: String
         if let cached = cachedToken {
             token = cached
@@ -82,23 +127,13 @@ actor RateLimitService {
         }
 
         do {
-            let data = try await fetchRateLimits(token: token)
-            lastSuccess = data
-            saveToDisk(data)
-            return data
+            return try await fetchRateLimits(token: token)
         } catch RateLimitError.unauthorized {
             // Token expiré → relire le keychain, retry une fois
             cachedToken = nil
             let freshToken = try await readOAuthToken()
             cachedToken = freshToken
-            let data = try await fetchRateLimits(token: freshToken)
-            lastSuccess = data
-            saveToDisk(data)
-            return data
-        } catch RateLimitError.apiError(let code) where code == 429 {
-            cooldownUntil = Date().addingTimeInterval(Self.cooldown)
-            Self.logger.warning("HTTP 429 on /api/oauth/usage — cooldown \(Int(Self.cooldown)) s")
-            throw RateLimitError.apiError(statusCode: code)
+            return try await fetchRateLimits(token: freshToken)
         }
     }
 
@@ -163,6 +198,12 @@ actor RateLimitService {
         }
         guard http.statusCode == 200 else {
             if http.statusCode == 401 { throw RateLimitError.unauthorized }
+            if http.statusCode == 429 {
+                let rawRetryAfter = http.value(forHTTPHeaderField: "Retry-After")
+                let body = String(decoding: data.prefix(500), as: UTF8.self)
+                Self.logger.warning("HTTP 429 on /api/oauth/usage — Retry-After: \(rawRetryAfter ?? "absent", privacy: .public) — corps: \(body, privacy: .public)")
+                throw RateLimitError.rateLimited(retryAfter: Self.parseRetryAfter(rawRetryAfter))
+            }
             throw RateLimitError.apiError(statusCode: http.statusCode)
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -267,6 +308,7 @@ enum RateLimitError: Error, LocalizedError {
     case unauthorized
     case invalidResponse
     case apiError(statusCode: Int)
+    case rateLimited(retryAfter: TimeInterval?)
 
     var errorDescription: String? {
         switch self {
@@ -278,6 +320,8 @@ enum RateLimitError: Error, LocalizedError {
             return "Invalid API response"
         case .apiError(let code):
             return "API error (HTTP \(code))"
+        case .rateLimited(let retryAfter):
+            return "Rate limited (HTTP 429), next attempt in \(Int(retryAfter ?? 0)) s"
         }
     }
 }
