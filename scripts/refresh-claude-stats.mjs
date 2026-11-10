@@ -24,7 +24,7 @@
 //   2. Dédup des blocs usage par message.id — une réponse multi-tool-calls
 //      est écrite sur N lignes recopiant le même usage.
 
-import { readFileSync, writeFileSync, readdirSync, statSync, renameSync, unlinkSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, openSync, readSync, closeSync, readdirSync, statSync, renameSync, unlinkSync, existsSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
 import { randomBytes } from 'crypto';
@@ -151,13 +151,50 @@ function findDesktopAgentFiles(dir, files) {
 
 // ── Parsing JSONL ──────────────────────────────────────────────────
 
+// Lecture par blocs : readFileSync + toString échoue au-delà de 512 Mo
+// (ERR_STRING_TOO_LONG, vu le 07/11/2026 sur une session de 594 Mo).
+// Chaque entrée est réduite aux seuls champs utilisés par computeStats
+// pour ne pas garder en mémoire les contenus volumineux (tool results…).
+const CHUNK_SIZE = 16 * 1024 * 1024;
+
+function slimEntry(e) {
+  const m = e.message;
+  let message;
+  if (m && typeof m === 'object') {
+    message = { id: m.id, model: m.model, usage: m.usage };
+    if (Array.isArray(m.content)) message.content = m.content.map(c => ({ type: c?.type }));
+  }
+  return {
+    type: e.type, timestamp: e.timestamp, sessionId: e.sessionId,
+    isSidechain: e.isSidechain, timeSavedMs: e.timeSavedMs, message
+  };
+}
+
 function parseSessionFile(filePath) {
   const entries = [];
-  const content = readFileSync(filePath, 'utf-8');
-  for (const line of content.split('\n')) {
-    if (!line.trim()) continue;
-    try { entries.push(JSON.parse(line)); } catch {}
-  }
+  const pushLine = (buf) => {
+    if (buf.length === 0) return;
+    const line = buf.toString('utf-8');
+    if (!line.trim()) return;
+    try { entries.push(slimEntry(JSON.parse(line))); } catch {}
+  };
+  let fd;
+  try { fd = openSync(filePath, 'r'); } catch { return entries; }
+  try {
+    const chunk = Buffer.allocUnsafe(CHUNK_SIZE);
+    let rest = Buffer.alloc(0);
+    let n;
+    while ((n = readSync(fd, chunk, 0, CHUNK_SIZE, null)) > 0) {
+      let buf = rest.length ? Buffer.concat([rest, chunk.subarray(0, n)]) : Buffer.from(chunk.subarray(0, n));
+      let start = 0, nl;
+      while ((nl = buf.indexOf(10, start)) !== -1) {
+        pushLine(buf.subarray(start, nl));
+        start = nl + 1;
+      }
+      rest = buf.subarray(start);
+    }
+    pushLine(rest);
+  } finally { closeSync(fd); }
   return entries;
 }
 
