@@ -7,6 +7,9 @@
 
 import AppKit
 import Combine
+import os.log
+
+private let logger = Logger(subsystem: "com.claudeisland", category: "Fullscreen")
 
 // Private CGS API for detecting fullscreen spaces
 @_silgen_name("CGSMainConnectionID")
@@ -138,6 +141,7 @@ final class MenuBarDetector: ObservableObject {
         // Native fullscreen OR non-native terminal fullscreen
         let hidden = spaceType == 4 || isTerminalFullscreenOnBuiltIn()
         if hidden != isMenuBarHidden {
+            logger.info("Plein écran \(hidden ? "détecté" : "terminé", privacy: .public) (space type \(spaceType, privacy: .public))")
             isMenuBarHidden = hidden
         }
     }
@@ -177,8 +181,63 @@ final class MenuBarDetector: ObservableObject {
             let intersection = winRect.intersection(screenFrame)
             let coverage = (intersection.width * intersection.height) / screenArea
             if coverage >= 0.98 { return true }
+
+            // Plein écran décalé sous le notch : au réveil ou au déverrouillage,
+            // macOS ramène parfois la fenêtre Ghostty plein écran sous la barre de
+            // menus (1512×950 au lieu de 1512×982, mesuré le 10/11/2026), soit
+            // 96,7 % de couverture. Ce cadre est identique à celui d'une fenêtre
+            // simplement agrandie : on ne l'accepte que si la barre de menus de
+            // l'écran intégré est réellement masquée (Ghostty la masque tant qu'il
+            // se croit en plein écran).
+            if isShiftedBelowMenuBar(winRect, screenFrame: screenFrame, topInset: screen.safeAreaInsets.top),
+               isMenuBarHidden(onScreen: screenFrame) {
+                if !isMenuBarHidden {
+                    logger.info("Fenêtre terminal plein écran décalée sous le notch : \(String(describing: winRect), privacy: .public)")
+                }
+                return true
+            }
         }
         return false
+    }
+
+    /// Fenêtre pleine largeur, collée en bas de l'écran, dont le haut s'arrête
+    /// sous la bande de la barre de menus / du notch.
+    private func isShiftedBelowMenuBar(_ win: CGRect, screenFrame: CGRect, topInset: CGFloat) -> Bool {
+        let tol: CGFloat = 2
+        let menuBand = max(topInset, 24) + 10  // 32 pt mesurés avec le notch
+        let gap = win.minY - screenFrame.minY
+        return abs(win.minX - screenFrame.minX) <= tol
+            && abs(win.maxX - screenFrame.maxX) <= tol
+            && abs(win.maxY - screenFrame.maxY) <= tol
+            && gap > tol && gap <= menuBand
+    }
+
+    /// La fenêtre « Menubar » du WindowServer (niveau kCGMainMenuWindowLevel) de
+    /// cet écran est remontée au-dessus du bord haut quand la barre est masquée
+    /// (observé : y = 1047, h = 33 pour un écran dont le haut est à y = 1080 ;
+    /// y = 1080 quand elle est affichée). Sans fenêtre de barre identifiable, on
+    /// reste prudent : `false`.
+    private func isMenuBarHidden(onScreen screenFrame: CGRect) -> Bool {
+        guard let all = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else {
+            return false
+        }
+        let menuLevel = Int(CGWindowLevelForKey(.mainMenuWindow))
+        var found = false
+        for window in all {
+            guard let layer = window[kCGWindowLayer as String] as? Int, layer == menuLevel,
+                  let owner = window[kCGWindowOwnerName as String] as? String, owner == "Window Server",
+                  let boundsDict = window[kCGWindowBounds as String] as? NSDictionary else { continue }
+            var r = CGRect.zero
+            guard CGRectMakeWithDictionaryRepresentation(boundsDict, &r),
+                  r.height < 60,
+                  abs(r.minX - screenFrame.minX) <= 2,
+                  abs(r.width - screenFrame.width) <= 2 else { continue }
+            found = true
+            // Seule la position compte : kCGWindowIsOnscreen vaut false pour ces
+            // fenêtres même quand la barre est affichée (vérifié le 10/11/2026).
+            if r.minY >= screenFrame.minY - 1 { return false }  // barre visible
+        }
+        return found
     }
 
     /// The built-in screen (MacBook display with the notch)
