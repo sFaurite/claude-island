@@ -346,10 +346,12 @@ struct NotchWingsView: View {
                 .allowsHitTesting(false)
             }
 
-            ForEach(Array(visibleElements.enumerated()), id: \.element.id) { index, element in
+            // Éléments réellement rendus (évite un séparateur orphelin quand un élément est vide, ex. 5h nul)
+            let renderedElements = visibleElements.filter { wingElementHasContent($0) }
+            ForEach(Array(renderedElements.enumerated()), id: \.element.id) { index, element in
                 if index > 0 {
                     // Separator: vertical bar after heatmap, dot between others
-                    if element.id == "heatmap" || (index > 0 && visibleElements[index - 1].id == "heatmap") {
+                    if element.id == "heatmap" || (index > 0 && renderedElements[index - 1].id == "heatmap") {
                         Rectangle().fill(.white.opacity(0.15)).frame(width: 1, height: 20)
                             .allowsHitTesting(false)
                     } else {
@@ -368,6 +370,27 @@ struct NotchWingsView: View {
                     .contentShape(Rectangle())
                     .onTapGesture { toggleSection(.overage) }
             }
+        }
+    }
+
+    private func wingElementHasContent(_ element: WingElement) -> Bool {
+        switch element.id {
+        case "fable":
+            guard let rl = rateLimits else { return false }
+            return rl.fableUtilization != nil && rl.fableReset != nil
+        case "5h":
+            guard let rl = rateLimits else { return false }
+            return rl.fiveHourUtilization != nil && rl.fiveHourReset != nil
+        case "7j":
+            return rateLimits != nil
+        case "heatmap", "tokensAllTime", "tokensToday":
+            return stats != nil
+        case "record":
+            return (stats?.recordTokens ?? 0) > 0
+        case "lastDay":
+            return stats?.lastDayDate != nil
+        default:
+            return true
         }
     }
 
