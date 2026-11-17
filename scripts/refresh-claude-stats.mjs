@@ -59,43 +59,71 @@ const CACHE_FILE = process.env.CLAUDE_STATS_OUT || join(CLAUDE_DIR, 'stats-cache
 // cache) au lieu de input + output ; ajout du coût équivalent API (USD).
 const CACHE_VERSION = 3;
 
-// ── Tarifs API (USD / million de tokens) ───────────────────────────
-// Source : platform.claude.com/docs/en/about-claude/pricing, relevé le
-// 2026-09-23. SOURCE UNIQUE : la table est recopiée dans stats-cache.json
-// (champ `pricing`), où l'app la lit pour chiffrer le compteur live.
+// ── Tarifs API (USD / million de tokens) et taux de change ─────────
+// SOURCE UNIQUE : la table et le taux sont recopiés dans stats-cache.json
+// (champ `pricing`), où l'app les lit pour chiffrer le compteur live et
+// convertir en euros, et où le mod « fil » de Claude Code lit le taux.
 // Ordre significatif : le 1er motif contenu dans l'id du modèle l'emporte
-// (opus-5-5 avant opus-5, fable-5-1 avant fable-5).
-const PRICING = [
-  ['fable-5-1',  { input: 10,  write5m: 12.5,  write1h: 20,  read: 0.25, output: 50 }],
-  ['mythos-5-1', { input: 10,  write5m: 12.5,  write1h: 20,  read: 0.25, output: 50 }],
-  ['fable-5',    { input: 10,  write5m: 12.5,  write1h: 20,  read: 1,    output: 50 }],
-  ['mythos-5',   { input: 10,  write5m: 12.5,  write1h: 20,  read: 1,    output: 50 }],
-  ['opus-5-5',   { input: 4,   write5m: 5,     write1h: 8,   read: 0.2,  output: 20 }],
-  ['opus-5',     { input: 5,   write5m: 6.25,  write1h: 10,  read: 0.5,  output: 25 }],
-  ['opus-4-8',   { input: 5,   write5m: 6.25,  write1h: 10,  read: 0.5,  output: 25 }],
-  ['opus-4-7',   { input: 5,   write5m: 6.25,  write1h: 10,  read: 0.5,  output: 25 }],
-  ['opus-4-6',   { input: 5,   write5m: 6.25,  write1h: 10,  read: 0.5,  output: 25 }],
-  ['opus-4-5',   { input: 5,   write5m: 6.25,  write1h: 10,  read: 0.5,  output: 25 }],
-  ['opus-4',     { input: 15,  write5m: 18.75, write1h: 30,  read: 1.5,  output: 75 }],
-  ['sonnet-5',   { input: 2,   write5m: 2.5,   write1h: 4,   read: 0.2,  output: 10 }],
-  ['sonnet-4',   { input: 3,   write5m: 3.75,  write1h: 6,   read: 0.3,  output: 15 }],
-  ['haiku-4-5',  { input: 1,   write5m: 1.25,  write1h: 2,   read: 0.1,  output: 5 }],
-  ['haiku-3-5',  { input: 0.8, write5m: 1,     write1h: 1.6, read: 0.08, output: 4 }],
-];
+// (le plus long d'abord : opus-5-5 avant opus-5, fable-5-2 avant fable-5).
+// `long` : tarif des requêtes dont le prompt (entrée + cache) dépasse `above`.
+// `since` (AAAA-MM-JJ, UTC) : tarif valable à partir de ce jour. Un même motif
+// peut avoir plusieurs périodes, la plus récente d'abord ; sans `since`, le
+// tarif vaut depuis toujours. Un changement de prix ne réécrit donc pas le passé.
+//
+// Le bloc entre les balises est réécrit chaque semaine par maj-tarifs.mjs
+// (LaunchAgent com.claude.tarifs-hebdo) : ne pas l'éditer à la main.
+// <tarifs>
+const PRICING_SOURCE = 'platform.claude.com/docs/en/about-claude/pricing (2026-11-13)';
+const USD_TO_EUR = 0.88;
+const USD_TO_EUR_SOURCE = 'moyenne BCE du 2026-08-13 au 2026-11-12 (0.8782, 66 cotations)';
 const WEB_SEARCH_USD = 10 / 1000;
+const PRICING = [
+  ['mythos-5-2', { input: 8, write5m: 10, write1h: 16, read: 0.2, output: 40 }],
+  ['mythos-5-1', { input: 10, write5m: 12.5, write1h: 20, read: 0.25, output: 50 }],
+  ['sonnet-5-5', { input: 2, write5m: 2.5, write1h: 4, read: 0.1, output: 10 }],
+  ['sonnet-4-6', { input: 3, write5m: 3.75, write1h: 6, read: 0.3, output: 15 }],
+  ['sonnet-4-5', { input: 3, write5m: 3.75, write1h: 6, read: 0.3, output: 15 }],
+  ['fable-5-2', { input: 8, write5m: 10, write1h: 16, read: 0.2, output: 40 }],
+  ['fable-5-1', { input: 10, write5m: 12.5, write1h: 20, read: 0.25, output: 50 }],
+  ['haiku-5-5', { input: 0.1, write5m: 0.125, write1h: 0.2, read: 0.01, output: 0.5, long: { above: 100000, input: 0.5, write5m: 0.625, write1h: 1, read: 0.05, output: 2.5 } }],
+  ['haiku-4-5', { input: 1, write5m: 1.25, write1h: 2, read: 0.1, output: 5 }],
+  ['haiku-3-5', { input: 0.8, write5m: 1, write1h: 1.6, read: 0.08, output: 4 }],
+  ['mythos-5', { input: 10, write5m: 12.5, write1h: 20, read: 1, output: 50 }],
+  ['opus-5-5', { input: 4, write5m: 5, write1h: 8, read: 0.2, output: 20 }],
+  ['opus-4-8', { input: 5, write5m: 6.25, write1h: 10, read: 0.5, output: 25 }],
+  ['opus-4-7', { input: 5, write5m: 6.25, write1h: 10, read: 0.5, output: 25 }],
+  ['opus-4-6', { input: 5, write5m: 6.25, write1h: 10, read: 0.5, output: 25 }],
+  ['opus-4-5', { input: 5, write5m: 6.25, write1h: 10, read: 0.5, output: 25 }],
+  ['opus-4-1', { input: 15, write5m: 18.75, write1h: 30, read: 1.5, output: 75 }],
+  ['fable-5', { input: 10, write5m: 12.5, write1h: 20, read: 1, output: 50 }],
+  ['sonnet-5', { input: 2, write5m: 2.5, write1h: 4, read: 0.2, output: 10 }],
+  ['sonnet-4', { input: 3, write5m: 3.75, write1h: 6, read: 0.3, output: 15 }],
+  ['opus-5', { input: 5, write5m: 6.25, write1h: 10, read: 0.5, output: 25 }],
+  ['opus-4', { input: 15, write5m: 18.75, write1h: 30, read: 1.5, output: 75 }],
+];
+// </tarifs>
 const unpricedModels = new Set();
 
-function priceFor(model) {
-  for (const [pattern, p] of PRICING) if (model.includes(pattern)) return p;
+// `day` : le jour (UTC) de la réponse ; absent, le tarif actuel.
+function priceFor(model, day) {
+  for (const [pattern, p] of PRICING) {
+    if (model.includes(pattern) && (!p.since || !day || p.since <= day)) return p;
+  }
   if (model !== '<synthetic>') unpricedModels.add(model);
   return null;
 }
 
 // Coût USD d'un bloc usage. `outputOnly` : ligne ultérieure d'un même
 // message.id, dont seul le delta d'output est neuf.
-function usageCost(model, usage, outputTokens, outputOnly) {
-  const p = priceFor(model);
+function usageCost(model, usage, outputTokens, outputOnly, day) {
+  let p = priceFor(model, day);
   if (!p) return 0;
+  // Palier « long » (Haiku 5.5) : tout le prompt de la requête au-delà du seuil.
+  if (p.long) {
+    const prompt = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0)
+                 + (usage.cache_read_input_tokens || 0);
+    if (prompt > p.long.above) p = p.long;
+  }
   // Fast mode : tarif ×2 sur toutes les catégories (Opus 5.5 / 5 / 4.8).
   const k = usage.speed === 'fast' ? 2 : 1;
   let usd = outputTokens * p.output;
@@ -290,7 +318,7 @@ function computeStats(files) {
       }
       mu.inputTokens += addedInput;
       mu.outputTokens += addedOutput;
-      const addedCost = usageCost(model, usage, addedOutput, !firstSeen);
+      const addedCost = usageCost(model, usage, addedOutput, !firstSeen, msgDate.toISOString().slice(0, 10));
       mu.costUSD += addedCost;
       seenUsage.set(key, out);
 
@@ -380,7 +408,9 @@ function computeStats(files) {
     totalCostUSD: round2(Object.values(modelUsage).reduce((s, u) => s + u.costUSD, 0)),
     tokenMetric: 'input+cacheCreation+output',
     pricing: {
-      source: 'platform.claude.com/docs/en/about-claude/pricing (2026-09-23)',
+      source: PRICING_SOURCE,
+      usdToEur: USD_TO_EUR,
+      usdToEurSource: USD_TO_EUR_SOURCE,
       webSearchUSD: WEB_SEARCH_USD,
       models: PRICING.map(([match, p]) => ({ match, ...p })),
     },

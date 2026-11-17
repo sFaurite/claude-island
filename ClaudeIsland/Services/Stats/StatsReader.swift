@@ -131,6 +131,7 @@ struct StatsReader: Sendable {
             logger.warning("Failed to decode stats-cache.json")
             return nil
         }
+        if let rate = cache.pricing?.usdToEur, rate > 0 { ModelPricing.usdToEur = rate }
 
         let today = utcDateFormatter.string(from: Date())
 

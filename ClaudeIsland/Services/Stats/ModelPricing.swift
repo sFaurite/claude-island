@@ -22,10 +22,14 @@ struct ModelPrice: Codable, Sendable {
 }
 
 struct ModelPricing: Codable, Sendable {
-    /// Taux USD → EUR figé : moyenne BCE du 23/06 au 22/09/2026 (0,869 ; 0,872 au 22/09).
-    static let usdToEur = 0.87
+    /// Taux USD → EUR : celui de stats-cache.json (`pricing.usdToEur`, moyenne BCE
+    /// sur 3 mois mise à jour chaque semaine par maj-tarifs.mjs), posé par
+    /// StatsReader à chaque lecture du cache ; 0,87 tant qu'aucun cache ne le donne.
+    nonisolated(unsafe) static var usdToEur = 0.87
 
     let webSearchUSD: Double
+    /// Absent des caches écrits avant le 13/11/2026.
+    var usdToEur: Double?
     let models: [ModelPrice]
 
     static let empty = ModelPricing(webSearchUSD: 0, models: [])
