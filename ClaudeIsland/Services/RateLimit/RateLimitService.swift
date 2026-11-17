@@ -105,7 +105,9 @@ actor RateLimitService {
             saveToDisk(data)
             return data
         } catch RateLimitError.rateLimited(let retryAfter) {
-            // Relire le trousseau à la prochaine tentative : le 05/11/2026, les 429 ont
+            // Ici le 429 persiste alors que le jeton est bien celui du trousseau (le cas
+            // du jeton remplacé est rattrapé dans fetchWithTokenRefresh). On relit quand
+            // même le trousseau à la prochaine tentative : le 05/11/2026, les 429 ont
             // commencé 2 min après une écriture du trousseau et cessé dès le premier
             // relevé d'un nouveau processus, qui en a relu le jeton.
             cachedToken = nil
@@ -133,6 +135,20 @@ actor RateLimitService {
             cachedToken = nil
             let freshToken = try await readOAuthToken()
             cachedToken = freshToken
+            return try await fetchRateLimits(token: freshToken)
+        } catch RateLimitError.rateLimited(let retryAfter) {
+            // Un jeton remplacé dans le trousseau mais pas encore arrivé à échéance est
+            // refusé en 429 et non en 401. Le 17/11/2026 : trousseau réécrit à 16:32:05,
+            // 429 à 16:36:00 avec `Retry-After: 3600`, soit 1 h de relevé figé pour un
+            // jeton périmé (même enchaînement le 05/11). Si le trousseau contient un
+            // autre jeton que celui refusé, on réessaie tout de suite, une seule fois ;
+            // sinon le 429 est un vrai refus de cadence et le cooldown s'applique.
+            cachedToken = nil
+            guard let freshToken = try? await readOAuthToken(), freshToken != token else {
+                throw RateLimitError.rateLimited(retryAfter: retryAfter)
+            }
+            cachedToken = freshToken
+            Self.logger.notice("/api/oauth/usage: 429 avec un jeton remplacé dans le trousseau, nouvel essai immédiat")
             return try await fetchRateLimits(token: freshToken)
         }
     }
